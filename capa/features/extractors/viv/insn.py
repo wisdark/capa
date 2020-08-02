@@ -1,4 +1,10 @@
 # Copyright (C) 2020 FireEye, Inc. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at: [package root]/LICENSE.txt
+# Unless required by applicable law or agreed to in writing, software distributed under the License
+#  is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and limitations under the License.
 
 import envi.memory
 import vivisect.const
@@ -175,6 +181,22 @@ def extract_insn_bytes_features(f, bb, insn):
                 yield Bytes(extracted_bytes), insn.va
 
 
+def read_memory(vw, va, size):
+    # as documented in #176, vivisect will not readMemory() when the section is not marked readable.
+    #
+    # but here, we don't care about permissions.
+    # so, copy the viv implementation of readMemory and remove the permissions check.
+    #
+    # this is derived from:
+    #   https://github.com/vivisect/vivisect/blob/5eb4d237bddd4069449a6bc094d332ceed6f9a96/envi/memory.py#L453-L462
+    for mva, mmaxva, mmap, mbytes in vw._map_defs:
+        if va >= mva and va < mmaxva:
+            mva, msize, mperms, mfname = mmap
+            offset = va - mva
+            return mbytes[offset : offset + size]
+    raise envi.SegmentationViolation(va)
+
+
 def read_string(vw, offset):
     try:
         alen = vw.detectString(offset)
@@ -182,7 +204,7 @@ def read_string(vw, offset):
         pass
     else:
         if alen > 0:
-            return vw.readMemory(offset, alen).decode("utf-8")
+            return read_memory(vw, offset, alen).decode("utf-8")
 
     try:
         ulen = vw.detectUnicode(offset)
@@ -197,7 +219,7 @@ def read_string(vw, offset):
                 # vivisect seems to mis-detect the end unicode strings
                 # off by one, too short
                 ulen += 1
-            return vw.readMemory(offset, ulen).decode("utf-16")
+            return read_memory(vw, offset, ulen).decode("utf-16")
 
     raise ValueError("not a string", offset)
 
@@ -242,6 +264,8 @@ def extract_insn_offset_features(f, bb, insn):
         # TODO: do x64 support for real.
         if oper.reg == envi.archs.amd64.disasm.REG_RBP:
             continue
+
+        # viv already decodes offsets as signed
 
         yield Offset(oper.disp), insn.va
 

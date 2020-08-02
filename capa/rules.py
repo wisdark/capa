@@ -1,4 +1,10 @@
 # Copyright (C) 2020 FireEye, Inc. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at: [package root]/LICENSE.txt
+# Unless required by applicable law or agreed to in writing, software distributed under the License
+#  is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and limitations under the License.
 
 import uuid
 import codecs
@@ -259,21 +265,21 @@ def build_statements(d, scope):
 
     key = list(d.keys())[0]
     if key == "and":
-        return And(*[build_statements(dd, scope) for dd in d[key]])
+        return And([build_statements(dd, scope) for dd in d[key]], description=d.get("description"))
     elif key == "or":
-        return Or(*[build_statements(dd, scope) for dd in d[key]])
+        return Or([build_statements(dd, scope) for dd in d[key]], description=d.get("description"))
     elif key == "not":
         if len(d[key]) != 1:
             raise InvalidRule("not statement must have exactly one child statement")
-        return Not(*[build_statements(dd, scope) for dd in d[key]])
+        return Not(build_statements(d[key][0], scope), description=d.get("description"))
     elif key.endswith(" or more"):
         count = int(key[: -len("or more")])
-        return Some(count, *[build_statements(dd, scope) for dd in d[key]])
+        return Some(count, [build_statements(dd, scope) for dd in d[key]], description=d.get("description"))
     elif key == "optional":
         # `optional` is an alias for `0 or more`
         # which is useful for documenting behaviors,
         # like with `write file`, we might say that `WriteFile` is optionally found alongside `CreateFileA`.
-        return Some(0, *[build_statements(dd, scope) for dd in d[key]])
+        return Some(0, [build_statements(dd, scope) for dd in d[key]], description=d.get("description"))
 
     elif key == "function":
         if scope != FILE_SCOPE:
@@ -282,7 +288,7 @@ def build_statements(d, scope):
         if len(d[key]) != 1:
             raise InvalidRule("subscope must have exactly one child statement")
 
-        return Subscope(FUNCTION_SCOPE, *[build_statements(dd, FUNCTION_SCOPE) for dd in d[key]])
+        return Subscope(FUNCTION_SCOPE, build_statements(d[key][0], FUNCTION_SCOPE))
 
     elif key == "basic block":
         if scope != FUNCTION_SCOPE:
@@ -291,7 +297,7 @@ def build_statements(d, scope):
         if len(d[key]) != 1:
             raise InvalidRule("subscope must have exactly one child statement")
 
-        return Subscope(BASIC_BLOCK_SCOPE, *[build_statements(dd, BASIC_BLOCK_SCOPE) for dd in d[key]])
+        return Subscope(BASIC_BLOCK_SCOPE, build_statements(d[key][0], BASIC_BLOCK_SCOPE))
 
     elif key.startswith("count(") and key.endswith(")"):
         # e.g.:
@@ -332,18 +338,18 @@ def build_statements(d, scope):
 
         count = d[key]
         if isinstance(count, int):
-            return Range(feature, min=count, max=count)
+            return Range(feature, min=count, max=count, description=d.get("description"))
         elif count.endswith(" or more"):
             min = parse_int(count[: -len(" or more")])
             max = None
-            return Range(feature, min=min, max=max)
+            return Range(feature, min=min, max=max, description=d.get("description"))
         elif count.endswith(" or fewer"):
             min = None
             max = parse_int(count[: -len(" or fewer")])
-            return Range(feature, min=min, max=max)
+            return Range(feature, min=min, max=max, description=d.get("description"))
         elif count.startswith("("):
             min, max = parse_range(count)
-            return Range(feature, min=min, max=max)
+            return Range(feature, min=min, max=max, description=d.get("description"))
         else:
             raise InvalidRule("unexpected range: %s" % (count))
     elif key == "string" and not isinstance(d[key], six.string_types):

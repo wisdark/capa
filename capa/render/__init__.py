@@ -1,4 +1,10 @@
 # Copyright (C) 2020 FireEye, Inc. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at: [package root]/LICENSE.txt
+# Unless required by applicable law or agreed to in writing, software distributed under the License
+#  is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and limitations under the License.
 
 import json
 
@@ -20,39 +26,23 @@ def convert_statement_to_result_document(statement):
             "type": "range"
         },
     """
-    if isinstance(statement, capa.engine.And):
-        return {
-            "type": "and",
-        }
-    elif isinstance(statement, capa.engine.Or):
-        return {
-            "type": "or",
-        }
-    elif isinstance(statement, capa.engine.Not):
-        return {
-            "type": "not",
-        }
-    elif isinstance(statement, capa.engine.Some) and statement.count == 0:
-        return {"type": "optional"}
-    elif isinstance(statement, capa.engine.Some) and statement.count > 0:
-        return {
-            "type": "some",
-            "count": statement.count,
-        }
-    elif isinstance(statement, capa.engine.Range):
-        return {
-            "type": "range",
-            "min": statement.min,
-            "max": statement.max,
-            "child": convert_feature_to_result_document(statement.child),
-        }
-    elif isinstance(statement, capa.engine.Subscope):
-        return {
-            "type": "subscope",
-            "subscope": statement.scope,
-        }
-    else:
-        raise RuntimeError("unexpected match statement type: " + str(statement))
+    statement_type = statement.name.lower()
+    result = {"type": statement_type}
+    if statement.description:
+        result["description"] = statement.description
+
+    if statement_type == "some" and statement.count == 0:
+        result["type"] = "optional"
+    elif statement_type == "some":
+        result["count"] = statement.count
+    elif statement_type == "range":
+        result["min"] = statement.min
+        result["max"] = statement.max
+        result["child"] = convert_feature_to_result_document(statement.child)
+    elif statement_type == "subscope":
+        result["subscope"] = statement.scope
+
+    return result
 
 
 def convert_feature_to_result_document(feature):

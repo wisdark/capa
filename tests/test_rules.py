@@ -1,4 +1,10 @@
 # Copyright (C) 2020 FireEye, Inc. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at: [package root]/LICENSE.txt
+# Unless required by applicable law or agreed to in writing, software distributed under the License
+#  is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and limitations under the License.
 
 import textwrap
 
@@ -77,6 +83,16 @@ def test_rule_yaml_descriptions():
                     - string: '/SELECT.*FROM.*WHERE/i'
                       description: SQL WHERE Clause
                     - count(number(2 = AF_INET/SOCK_DGRAM)): 2
+                    - or:
+                        - and:
+                            - offset: 0x50 = IMAGE_NT_HEADERS.OptionalHeader.SizeOfImage
+                            - offset: 0x34 = IMAGE_NT_HEADERS.OptionalHeader.ImageBase
+                          description: 32-bits
+                        - and:
+                            - offset: 0x50 = IMAGE_NT_HEADERS64.OptionalHeader.SizeOfImage
+                            - offset: 0x30 = IMAGE_NT_HEADERS64.OptionalHeader.ImageBase
+                          description: 64-bits
+                      description: PE headers offsets
         """
     )
     r = capa.rules.Rule.from_yaml(rule)
@@ -87,6 +103,8 @@ def test_rule_yaml_descriptions():
                 Number(2): {2, 3},
                 String("This program cannot be run in DOS mode."): {4},
                 String("SELECT password FROM hidden_table WHERE user == admin"): {5},
+                Offset(0x50): {6},
+                Offset(0x30): {7},
             }
         )
         == True

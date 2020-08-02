@@ -1,4 +1,10 @@
 # Copyright (C) 2020 FireEye, Inc. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at: [package root]/LICENSE.txt
+# Unless required by applicable law or agreed to in writing, software distributed under the License
+#  is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and limitations under the License.
 
 import viv_utils
 from fixtures import *
@@ -110,6 +116,13 @@ def test_offset_features(mimikatz):
     # the following are stack references
     assert capa.features.insn.Offset(0x8) not in features
     assert capa.features.insn.Offset(0x10) not in features
+
+    # this function has the following negative offsets
+    # movzx   ecx, byte ptr [eax-1]
+    # movzx   eax, byte ptr [eax-2]
+    features = extract_function_features(viv_utils.Function(mimikatz.vw, 0x4011FB))
+    assert capa.features.insn.Offset(-0x1) in features
+    assert capa.features.insn.Offset(-0x2) in features
 
 
 def test_nzxor_features(mimikatz):

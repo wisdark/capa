@@ -1,4 +1,10 @@
 # Copyright (C) 2020 FireEye, Inc. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at: [package root]/LICENSE.txt
+# Unless required by applicable law or agreed to in writing, software distributed under the License
+#  is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and limitations under the License.
 
 import os
 import sys
@@ -13,7 +19,7 @@ if sys.version_info >= (3, 0):
 else:
     # py2
     requirements.append("enum34")
-    requirements.append("vivisect")
+    requirements.append("vivisect @ https://github.com/williballenthin/vivisect/tarball/v0.0.20200708#egg=vivisect")
     requirements.append("viv-utils")
     requirements.append("networkx==2.2")  # v2.2 is last version supported by Python 2.7
 
@@ -25,7 +31,7 @@ with open(os.path.join("capa", "version.py"), "rb") as f:
 
 
 setuptools.setup(
-    name="capa",
+    name="flare-capa",
     version=__version__,
     description="The FLARE team's open-source tool to identify capabilities in executable files.",
     long_description="",

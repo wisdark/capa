@@ -6,6 +6,12 @@ Usage:
    $ python scripts/lint.py rules/
 
 Copyright (C) 2020 FireEye, Inc. All Rights Reserved.
+Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+You may obtain a copy of the License at: [package root]/LICENSE.txt
+Unless required by applicable law or agreed to in writing, software distributed under the License
+ is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and limitations under the License.
 """
 import os
 import sys
@@ -43,7 +49,8 @@ class NameCasing(Lint):
 
 class FilenameDoesntMatchRuleName(Lint):
     name = "filename doesn't match the rule name"
-    recommendation = 'Rename rule file to match the rule name, expected: "{:s}", found: "{:s}"'
+    recommendation = "Rename rule file to match the rule name"
+    recommendation_template = 'Rename rule file to match the rule name, expected: "{:s}", found: "{:s}"'
 
     def check_rule(self, ctx, rule):
         expected = rule.name
@@ -53,11 +60,12 @@ class FilenameDoesntMatchRuleName(Lint):
         expected = expected.replace(")", "")
         expected = expected.replace("+", "")
         expected = expected.replace("/", "")
+        expected = expected.replace(".", "")
         expected = expected + ".yml"
 
         found = os.path.basename(rule.meta["capa/path"])
 
-        self.recommendation = self.recommendation.format(expected, found)
+        self.recommendation = self.recommendation_template.format(expected, found)
 
         return expected != found
 
@@ -172,7 +180,11 @@ class DoesntMatchExample(Lint):
         if not ctx["is_thorough"]:
             return False
 
-        for example in rule.meta.get("examples", []):
+        examples = rule.meta.get("examples", [])
+        if not examples:
+            return False
+
+        for example in examples:
             example_id = example.partition(":")[0]
             try:
                 path = ctx["samples"][example_id]
@@ -194,7 +206,8 @@ class DoesntMatchExample(Lint):
 
 class UnusualMetaField(Lint):
     name = "unusual meta field"
-    recommendation = 'Remove the meta field: "{:s}"'
+    recommendation = "Remove the meta field"
+    recommendation_template = 'Remove the meta field: "{:s}"'
 
     def check_rule(self, ctx, rule):
         for key in rule.meta.keys():
@@ -202,7 +215,7 @@ class UnusualMetaField(Lint):
                 continue
             if key in capa.rules.HIDDEN_META_KEYS:
                 continue
-            self.recommendation = self.recommendation.format(key)
+            self.recommendation = self.recommendation_template.format(key)
             return True
 
         return False
@@ -246,18 +259,19 @@ class FeatureStringTooShort(Lint):
         return False
 
 
-class FeatureNegativeNumberOrOffset(Lint):
+class FeatureNegativeNumber(Lint):
     name = "feature value is negative"
-    recommendation = (
-        "capa treats all numbers as unsigned values; you may specify the number's two's complement "
+    recommendation = "specify the number's two's complement representation"
+    recommendation_template = (
+        "capa treats number features as unsigned values; you may specify the number's two's complement "
         'representation; will not match on "{:d}"'
     )
 
     def check_features(self, ctx, features):
         for feature in features:
-            if isinstance(feature, (capa.features.insn.Number, capa.features.insn.Offset)):
+            if isinstance(feature, (capa.features.insn.Number,)):
                 if feature.value < 0:
-                    self.recommendation = self.recommendation.format(feature.value)
+                    self.recommendation = self.recommendation_template.format(feature.value)
                     return True
         return False
 
@@ -313,7 +327,7 @@ def lint_meta(ctx, rule):
 
 FEATURE_LINTS = (
     FeatureStringTooShort(),
-    FeatureNegativeNumberOrOffset(),
+    FeatureNegativeNumber(),
 )
 
 
@@ -395,6 +409,11 @@ def lint_rule(ctx, rule):
                 "%s  %s: %s: %s"
                 % ("    " if is_nursery_rule(rule) else "", level, violation.name, violation.recommendation,)
             )
+
+    elif len(violations) == 0 and is_nursery_rule(rule):
+        print("")
+        print("%s%s" % ("    (nursery) ", rule.name))
+        print("%s  %s: %s: %s" % ("    ", "WARN", "no violations", "Graduate the rule"))
 
     return len(violations) > 0 and not is_nursery_rule(rule)
 

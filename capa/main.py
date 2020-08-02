@@ -1,8 +1,12 @@
 #!/usr/bin/env python2
 """
-identify capabilities in programs.
-
 Copyright (C) 2020 FireEye, Inc. All Rights Reserved.
+Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+You may obtain a copy of the License at: [package root]/LICENSE.txt
+Unless required by applicable law or agreed to in writing, software distributed under the License
+ is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and limitations under the License.
 """
 import os
 import sys
@@ -206,7 +210,7 @@ def is_supported_file_type(sample):
 SHELLCODE_BASE = 0x690000
 
 
-def get_shellcode_vw(sample, arch="auto"):
+def get_shellcode_vw(sample, arch="auto", should_save=True):
     """
     Return shellcode workspace using explicit arch or via auto detect
     """
@@ -218,12 +222,17 @@ def get_shellcode_vw(sample, arch="auto"):
         # choose arch with most functions, idea by Jay G.
         vw_cands = []
         for arch in ["i386", "amd64"]:
-            vw_cands.append(viv_utils.getShellcodeWorkspace(sample_bytes, arch, base=SHELLCODE_BASE))
+            vw_cands.append(
+                viv_utils.getShellcodeWorkspace(sample_bytes, arch, base=SHELLCODE_BASE, should_save=should_save)
+            )
         if not vw_cands:
             raise ValueError("could not generate vivisect workspace")
         vw = max(vw_cands, key=lambda vw: len(vw.getFunctions()))
     else:
-        vw = viv_utils.getShellcodeWorkspace(sample_bytes, arch, base=SHELLCODE_BASE)
+        vw = viv_utils.getShellcodeWorkspace(sample_bytes, arch, base=SHELLCODE_BASE, should_save=should_save)
+
+    vw.setMeta("StorageName", "%s.viv" % sample)
+
     return vw
 
 
@@ -242,20 +251,20 @@ class UnsupportedFormatError(ValueError):
     pass
 
 
-def get_workspace(path, format):
+def get_workspace(path, format, should_save=True):
     import viv_utils
 
     logger.debug("generating vivisect workspace for: %s", path)
     if format == "auto":
         if not is_supported_file_type(path):
             raise UnsupportedFormatError()
-        vw = viv_utils.getWorkspace(path)
+        vw = viv_utils.getWorkspace(path, should_save=should_save)
     elif format == "pe":
-        vw = viv_utils.getWorkspace(path)
+        vw = viv_utils.getWorkspace(path, should_save=should_save)
     elif format == "sc32":
-        vw = get_shellcode_vw(path, arch="i386")
+        vw = get_shellcode_vw(path, arch="i386", should_save=should_save)
     elif format == "sc64":
-        vw = get_shellcode_vw(path, arch="amd64")
+        vw = get_shellcode_vw(path, arch="amd64", should_save=should_save)
     logger.debug("%s", get_meta_str(vw))
     return vw
 
@@ -263,7 +272,14 @@ def get_workspace(path, format):
 def get_extractor_py2(path, format):
     import capa.features.extractors.viv
 
-    vw = get_workspace(path, format)
+    vw = get_workspace(path, format, should_save=False)
+
+    try:
+        vw.saveWorkspace()
+    except IOError:
+        # see #168 for discussion around how to handle non-writable directories
+        logger.info("source directory is not writable, won't save intermediate workspace")
+
     return capa.features.extractors.viv.VivisectFeatureExtractor(vw, path)
 
 
@@ -317,7 +333,7 @@ def get_rules(rule_path):
 
             for file in files:
                 if not file.endswith(".yml"):
-                    if not (file.endswith(".md") or file.endswith(".git")):
+                    if not (file.endswith(".md") or file.endswith(".git") or file.endswith(".txt")):
                         # expect to see readme.md, format.md, and maybe a .git directory
                         # other things maybe are rules, but are mis-named.
                         logger.warning("skipping non-.yml file: %s", file)
@@ -390,6 +406,7 @@ def main(argv=None):
     ]
     format_help = ", ".join(["%s: %s" % (f[0], f[1]) for f in formats])
 
+    desc = "The FLARE team's open-source tool to identify capabilities in executable files."
     epilog = textwrap.dedent(
         """
         By default, capa uses a default set of embedded rules.
@@ -402,13 +419,13 @@ def main(argv=None):
 
         examples:
           identify capabilities in a binary
-            capa suspicous.exe
+            capa suspicious.exe
 
           identify capabilities in 32-bit shellcode, see `-f` for all supported formats
             capa -f sc32 shellcode.bin
 
           report match locations
-            capa -v suspicous.exe
+            capa -v suspicious.exe
 
           report all feature match details
             capa -vv suspicious.exe
@@ -419,7 +436,7 @@ def main(argv=None):
     )
 
     parser = argparse.ArgumentParser(
-        description=__doc__, epilog=epilog, formatter_class=argparse.RawDescriptionHelpFormatter
+        description=desc, epilog=epilog, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("sample", type=str, help="path to sample to analyze")
     parser.add_argument("--version", action="version", version="%(prog)s {:s}".format(capa.version.__version__))
@@ -553,7 +570,7 @@ def main(argv=None):
 
     meta = collect_metadata(argv, args.sample, args.rules, format, extractor)
 
-    capabilities, counts = find_capabilities(rules, extractor)
+    capabilities, counts = find_capabilities(rules, extractor, disable_progress=args.quiet)
     meta["analysis"].update(counts)
 
     if has_file_limitation(rules, capabilities):
@@ -597,6 +614,9 @@ def ida_main():
     logging.basicConfig(level=logging.INFO)
     logging.getLogger().setLevel(logging.INFO)
 
+    if not capa.ida.helpers.is_supported_ida_version():
+        return -1
+
     if not capa.ida.helpers.is_supported_file_type():
         return -1
 
@@ -619,7 +639,7 @@ def ida_main():
     rules = get_rules(rules_path)
     rules = capa.rules.RuleSet(rules)
 
-    meta = collect_metadata([], "", rules_path, format, "IdaExtractor")
+    meta = capa.ida.helpers.collect_metadata()
 
     capabilities, counts = find_capabilities(rules, capa.features.extractors.ida.IdaFeatureExtractor())
     meta["analysis"].update(counts)
@@ -627,6 +647,7 @@ def ida_main():
     if has_file_limitation(rules, capabilities, is_standalone=False):
         capa.ida.helpers.inform_user_ida_ui("capa encountered warnings during analysis")
 
+    colorama.init(strip=True)
     print(capa.render.render_default(meta, rules, capabilities))
 
 

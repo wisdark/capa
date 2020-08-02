@@ -57,6 +57,12 @@ Example::
     ...
 
 Copyright (C) 2020 FireEye, Inc. All Rights Reserved.
+Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+You may obtain a copy of the License at: [package root]/LICENSE.txt
+Unless required by applicable law or agreed to in writing, software distributed under the License
+ is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and limitations under the License.
 """
 import sys
 import logging
@@ -126,7 +132,11 @@ def main(argv=None):
 
             for insn in extractor.get_instructions(f, bb):
                 for feature, va in extractor.extract_insn_features(f, bb, insn):
-                    print("insn: 0x%08x: %s" % (va, feature))
+                    try:
+                        print("insn: 0x%08x: %s" % (va, feature))
+                    except UnicodeEncodeError:
+                        # may be an issue while piping to less and encountering non-ascii characters
+                        continue
 
     return 0
 
