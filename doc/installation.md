@@ -22,12 +22,15 @@ By default, on MacOS Catalina or greater, Gatekeeper will block execution of the
 ![approve dialog](img/approve.png)
 
 ## Method 2: Using capa as a Python library
-To install capa as a Python library, you'll need to install a few dependencies, and then use `pip` to fetch the capa module.
-Note: this technique doesn't pull the default rule set, so you should check it out separately from [capa-rules](https://github.com/fireeye/capa-rules/) and pass the directory to the entrypoint using `-r`.
+To install capa as a Python library use `pip` to fetch the `flare-capa` module.
+
+#### *Note*:
+This method is appropriate for integrating capa in an existing project.
+This technique doesn't pull the default rule set, so you should check it out separately from [capa-rules](https://github.com/fireeye/capa-rules/) and pass the directory to the entrypoint using `-r` or set the rules path in the IDA Pro plugin.
+Alternatively, see Method 3 below.
 
 ### 1. Install capa module
-Second, use `pip` to install the capa module to your local Python environment. This fetches the library code to your computer but does not keep editable source files around for you to hack on. If you'd like to edit the source files, see below.
-`$ pip install https://github.com/fireeye/capa/archive/master.zip`
+Use `pip` to install the capa module to your local Python environment. This fetches the library code to your computer but does not keep editable source files around for you to hack on. If you'd like to edit the source files, see below. `$ pip install flare-capa`
 
 ### 2. Use capa
 You can now import the `capa` module from a Python script or use the IDA Pro plugins from the `capa/ida` directory. For more information please see the [usage](usage.md) documentation.
@@ -71,8 +74,20 @@ Note that some development dependencies (including the black code formatter) req
 To check the code style, formatting and run the tests you can run the script `scripts/ci.sh`.
 You can run it with the argument `no_tests` to skip the tests and only run the code style and formatting: `scripts/ci.sh no_tests`
 
-### 3. Setup hooks [optional]
+### 3. Compile binary using PyInstaller
+We compile capa standalone binaries using PyInstaller. To reproduce the build process check out the source code as described above and follow these steps.
 
+#### Install PyInstaller:
+For Python 2.7: `$ pip install 'pyinstaller==3.*'` (PyInstaller 4 doesn't support Python 2.7)
+
+For Python 3: `$ pip install 'pyinstaller`
+
+#### Run Pyinstaller
+`$ pyinstaller .github/pyinstaller/pyinstaller.spec`
+
+You can find the compiled binary in the created directory `dist/`.
+
+### 4. Setup hooks [optional]
 If you plan to contribute to capa, you may want to setup the hooks.
 Run `scripts/setup-hooks.sh` to set the following hooks up:
 - The `pre-commit` hook runs checks before every `git commit`.
@@ -81,4 +96,3 @@ Run `scripts/setup-hooks.sh` to set the following hooks up:
 - The `pre-push` hook runs checks before every `git push`.
   It runs `scripts/ci.sh` aborting the push if there are code style or rule linter offenses or if the tests fail.
   This way you can ensure everything is alright before sending a pull request.
-

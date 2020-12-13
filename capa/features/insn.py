@@ -13,23 +13,23 @@ class API(Feature):
     def __init__(self, name, description=None):
         # Downcase library name if given
         if "." in name:
-            modname, impname = name.split(".")
+            modname, _, impname = name.rpartition(".")
             name = modname.lower() + "." + impname
 
         super(API, self).__init__(name, description)
 
 
 class Number(Feature):
-    def __init__(self, value, description=None):
-        super(Number, self).__init__(value, description)
+    def __init__(self, value, arch=None, description=None):
+        super(Number, self).__init__(value, arch=arch, description=description)
 
     def get_value_str(self):
         return "0x%X" % self.value
 
 
 class Offset(Feature):
-    def __init__(self, value, description=None):
-        super(Offset, self).__init__(value, description)
+    def __init__(self, value, arch=None, description=None):
+        super(Offset, self).__init__(value, arch=arch, description=description)
 
     def get_value_str(self):
         return "0x%X" % self.value
@@ -37,4 +37,4 @@ class Offset(Feature):
 
 class Mnemonic(Feature):
     def __init__(self, value, description=None):
-        super(Mnemonic, self).__init__(value, description)
+        super(Mnemonic, self).__init__(value, description=description)

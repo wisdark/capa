@@ -33,6 +33,7 @@ import logging
 
 import idc
 import idautils
+import ida_funcs
 import ida_idaapi
 import ida_kernwin
 
@@ -41,7 +42,7 @@ logger = logging.getLogger("capa")
 
 def append_func_cmt(va, cmt, repeatable=False):
     """
-    add the given comment to the given function, 
+    add the given comment to the given function,
     if it doesn't already exist.
     """
     func = ida_funcs.get_func(va)

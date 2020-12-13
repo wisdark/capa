@@ -7,17 +7,33 @@
 # See the License for the specific language governing permissions and limitations under the License.
 
 import envi.memory
-import vivisect.const
 import envi.archs.i386.disasm
 
 import capa.features.extractors.helpers
-from capa.features import MAX_BYTES_FEATURE_SIZE, Bytes, String, Characteristic
-from capa.features.insn import Number, Offset, Mnemonic
+import capa.features.extractors.viv.helpers
+from capa.features import (
+    ARCH_X32,
+    ARCH_X64,
+    MAX_BYTES_FEATURE_SIZE,
+    THUNK_CHAIN_DEPTH_DELTA,
+    Bytes,
+    String,
+    Characteristic,
+)
+from capa.features.insn import API, Number, Offset, Mnemonic
 from capa.features.extractors.viv.indirect_calls import NotFoundError, resolve_indirect_call
 
 # security cookie checks may perform non-zeroing XORs, these are expected within a certain
 # byte range within the first and returning basic blocks, this helps to reduce FP features
 SECURITY_COOKIE_BYTES_DELTA = 0x40
+
+
+def get_arch(vw):
+    arch = vw.getMeta("Architecture")
+    if arch == "i386":
+        return ARCH_X32
+    elif arch == "amd64":
+        return ARCH_X64
 
 
 def interface_extract_instruction_XXX(f, bb, insn):
@@ -39,11 +55,15 @@ def get_imports(vw):
     """
     caching accessor to vivisect workspace imports
     avoids performance issues in vivisect when collecting locations
+
+    returns: Dict[int, Tuple[str, str]]
     """
     if "imports" in vw.metadata:
         return vw.metadata["imports"]
     else:
-        imports = {p[0]: p[3] for p in vw.getImports()}
+        imports = {
+            p[0]: (p[3].rpartition(".")[0], p[3].replace(".ord", ".#").rpartition(".")[2]) for p in vw.getImports()
+        }
         vw.metadata["imports"] = imports
         return imports
 
@@ -55,8 +75,12 @@ def extract_insn_api_features(f, bb, insn):
     #
     #    call dword [0x00473038]
 
-    if insn.mnem != "call":
+    if insn.mnem not in ("call", "jmp"):
         return
+
+    if insn.mnem == "jmp":
+        if f.vw.getFunctionMeta(f.va, "Thunk"):
+            return
 
     # traditional call via IAT
     if isinstance(insn.opers[0], envi.archs.i386.disasm.i386ImmMemOper):
@@ -64,26 +88,38 @@ def extract_insn_api_features(f, bb, insn):
         target = oper.getOperAddr(insn)
 
         imports = get_imports(f.vw)
-        if target in imports.keys():
-            for feature, va in capa.features.extractors.helpers.generate_api_features(imports[target], insn.va):
-                yield feature, va
+        if target in imports:
+            dll, symbol = imports[target]
+            for name in capa.features.extractors.helpers.generate_symbols(dll, symbol):
+                yield API(name), insn.va
 
     # call via thunk on x86,
     # see 9324d1a8ae37a36ae560c37448c9705a at 0x407985
     #
     # this is also how calls to internal functions may be decoded on x64.
     # see Lab21-01.exe_:0x140001178
-    elif isinstance(insn.opers[0], envi.archs.i386.disasm.i386PcRelOper):
-        target = insn.opers[0].getOperValue(insn)
+    #
+    # follow chained thunks, e.g. in 82bf6347acf15e5d883715dc289d8a2b at 0x14005E0FF in
+    # 0x140059342 (viv) / 0x14005E0C0 (IDA)
+    # 14005E0FF call    j_ElfClearEventLogFileW (14005AAF8)
+    #   14005AAF8 jmp     ElfClearEventLogFileW (14005E196)
+    #     14005E196 jmp     cs:__imp_ElfClearEventLogFileW
 
-        try:
-            thunk = f.vw.getFunctionMeta(target, "Thunk")
-        except vivisect.exc.InvalidFunction:
+    elif isinstance(insn.opers[0], envi.archs.i386.disasm.i386PcRelOper):
+        imports = get_imports(f.vw)
+        target = capa.features.extractors.viv.helpers.get_coderef_from(f.vw, insn.va)
+        if not target:
             return
-        else:
-            if thunk:
-                for feature, va in capa.features.extractors.helpers.generate_api_features(thunk, insn.va):
-                    yield feature, va
+
+        for _ in range(THUNK_CHAIN_DEPTH_DELTA):
+            if target in imports:
+                dll, symbol = imports[target]
+                for name in capa.features.extractors.helpers.generate_symbols(dll, symbol):
+                    yield API(name), insn.va
+
+            target = capa.features.extractors.viv.helpers.get_coderef_from(f.vw, target)
+            if not target:
+                return
 
     # call via import on x64
     # see Lab21-01.exe_:0x14000118C
@@ -92,9 +128,10 @@ def extract_insn_api_features(f, bb, insn):
         target = op.getOperAddr(insn)
 
         imports = get_imports(f.vw)
-        if target in imports.keys():
-            for feature, va in capa.features.extractors.helpers.generate_api_features(imports[target], insn.va):
-                yield feature, va
+        if target in imports:
+            dll, symbol = imports[target]
+            for name in capa.features.extractors.helpers.generate_symbols(dll, symbol):
+                yield API(name), insn.va
 
     elif isinstance(insn.opers[0], envi.archs.i386.disasm.i386RegOper):
         try:
@@ -108,9 +145,10 @@ def extract_insn_api_features(f, bb, insn):
             return
 
         imports = get_imports(f.vw)
-        if target in imports.keys():
-            for feature, va in capa.features.extractors.helpers.generate_api_features(imports[target], insn.va):
-                yield feature, va
+        if target in imports:
+            dll, symbol = imports[target]
+            for name in capa.features.extractors.helpers.generate_symbols(dll, symbol):
+                yield API(name), insn.va
 
 
 def extract_insn_number_features(f, bb, insn):
@@ -120,10 +158,13 @@ def extract_insn_number_features(f, bb, insn):
     #     push    3136B0h         ; dwControlCode
     for oper in insn.opers:
         # this is for both x32 and x64
-        if not isinstance(oper, envi.archs.i386.disasm.i386ImmOper):
+        if not isinstance(oper, (envi.archs.i386.disasm.i386ImmOper, envi.archs.i386.disasm.i386ImmMemOper)):
             continue
 
-        v = oper.getOperValue(oper)
+        if isinstance(oper, envi.archs.i386.disasm.i386ImmOper):
+            v = oper.getOperValue(oper)
+        else:
+            v = oper.getOperAddr(oper)
 
         if f.vw.probeMemory(v, 1, envi.memory.MM_READ):
             # this is a valid address
@@ -138,47 +179,39 @@ def extract_insn_number_features(f, bb, insn):
             return
 
         yield Number(v), insn.va
+        yield Number(v, arch=get_arch(f.vw)), insn.va
 
 
-def extract_insn_bytes_features(f, bb, insn):
+def derefs(vw, p):
     """
-    parse byte sequence features from the given instruction.
-    example:
-        #     push    offset iid_004118d4_IShellLinkA ; riid
+    recursively follow the given pointer, yielding the valid memory addresses along the way.
+    useful when you may have a pointer to string, or pointer to pointer to string, etc.
+
+    this is a "do what i mean" type of helper function.
     """
-    for oper in insn.opers:
-        if insn.mnem == "call":
-            # ignore call instructions
-            continue
+    depth = 0
+    while True:
+        if not vw.isValidPointer(p):
+            return
+        yield p
 
-        if isinstance(oper, envi.archs.i386.disasm.i386ImmOper):
-            v = oper.getOperValue(oper)
-        elif isinstance(oper, envi.archs.i386.disasm.i386RegMemOper):
-            # handle case like:
-            #   movzx   ecx, ds:byte_423258[eax]
-            v = oper.disp
-        elif isinstance(oper, envi.archs.amd64.disasm.Amd64RipRelOper):
-            # see: Lab21-01.exe_:0x1400010D3
-            v = oper.getOperAddr(insn)
-        else:
-            continue
-
-        segm = f.vw.getSegment(v)
-        if not segm:
-            continue
-
-        segm_end = segm[0] + segm[1]
         try:
-            # Do not read beyond the end of a segment
-            if v + MAX_BYTES_FEATURE_SIZE > segm_end:
-                extracted_bytes = f.vw.readMemory(v, segm_end - v)
-            else:
-                extracted_bytes = f.vw.readMemory(v, MAX_BYTES_FEATURE_SIZE)
-        except envi.SegmentationViolation:
-            pass
-        else:
-            if not capa.features.extractors.helpers.all_zeros(extracted_bytes):
-                yield Bytes(extracted_bytes), insn.va
+            next = vw.readMemoryPtr(p)
+        except Exception:
+            # if not enough bytes can be read, such as end of the section.
+            # unfortunately, viv returns a plain old generic `Exception` for this.
+            return
+
+        # sanity: pointer points to self
+        if next == p:
+            return
+
+        # sanity: avoid chains of pointers that are unreasonably deep
+        depth += 1
+        if depth > 10:
+            return
+
+        p = next
 
 
 def read_memory(vw, va, size):
@@ -195,6 +228,65 @@ def read_memory(vw, va, size):
             offset = va - mva
             return mbytes[offset : offset + size]
     raise envi.SegmentationViolation(va)
+
+
+def read_bytes(vw, va):
+    """
+    read up to MAX_BYTES_FEATURE_SIZE from the given address.
+
+    raises:
+      envi.SegmentationViolation: if the given address is not valid.
+    """
+    segm = vw.getSegment(va)
+    if not segm:
+        raise envi.SegmentationViolation()
+
+    segm_end = segm[0] + segm[1]
+    try:
+        # Do not read beyond the end of a segment
+        if va + MAX_BYTES_FEATURE_SIZE > segm_end:
+            return read_memory(vw, va, segm_end - va)
+        else:
+            return read_memory(vw, va, MAX_BYTES_FEATURE_SIZE)
+    except envi.SegmentationViolation:
+        raise
+
+
+def extract_insn_bytes_features(f, bb, insn):
+    """
+    parse byte sequence features from the given instruction.
+    example:
+        #     push    offset iid_004118d4_IShellLinkA ; riid
+    """
+    for oper in insn.opers:
+        if insn.mnem == "call":
+            continue
+
+        if isinstance(oper, envi.archs.i386.disasm.i386ImmOper):
+            v = oper.getOperValue(oper)
+        elif isinstance(oper, envi.archs.i386.disasm.i386RegMemOper):
+            # handle case like:
+            #   movzx   ecx, ds:byte_423258[eax]
+            v = oper.disp
+        elif isinstance(oper, envi.archs.i386.disasm.i386SibOper):
+            # like 0x401000 in `mov eax, 0x401000[2 * ebx]`
+            v = oper.imm
+        elif isinstance(oper, envi.archs.amd64.disasm.Amd64RipRelOper):
+            # see: Lab21-01.exe_:0x1400010D3
+            v = oper.getOperAddr(insn)
+        else:
+            continue
+
+        for v in derefs(f.vw, v):
+            try:
+                buf = read_bytes(f.vw, v)
+            except envi.SegmentationViolation:
+                continue
+
+            if capa.features.extractors.helpers.all_zeros(buf):
+                continue
+
+            yield Bytes(buf), insn.va
 
 
 def read_string(vw, offset):
@@ -219,6 +311,10 @@ def read_string(vw, offset):
                 # vivisect seems to mis-detect the end unicode strings
                 # off by one, too short
                 ulen += 1
+            else:
+                # vivisect seems to mis-detect the end unicode strings
+                # off by two, too short
+                ulen += 2
             return read_memory(vw, offset, ulen).decode("utf-16")
 
     raise ValueError("not a string", offset)
@@ -229,20 +325,28 @@ def extract_insn_string_features(f, bb, insn):
     # example:
     #
     #     push    offset aAcr     ; "ACR  > "
+
     for oper in insn.opers:
         if isinstance(oper, envi.archs.i386.disasm.i386ImmOper):
             v = oper.getOperValue(oper)
+        elif isinstance(oper, envi.archs.i386.disasm.i386ImmMemOper):
+            # like 0x10056CB4 in `lea eax, dword [0x10056CB4]`
+            v = oper.imm
+        elif isinstance(oper, envi.archs.i386.disasm.i386SibOper):
+            # like 0x401000 in `mov eax, 0x401000[2 * ebx]`
+            v = oper.imm
         elif isinstance(oper, envi.archs.amd64.disasm.Amd64RipRelOper):
             v = oper.getOperAddr(insn)
         else:
             continue
 
-        try:
-            s = read_string(f.vw, v)
-        except ValueError:
-            continue
-        else:
-            yield String(s.rstrip("\x00")), insn.va
+        for v in derefs(f.vw, v):
+            try:
+                s = read_string(f.vw, v)
+            except ValueError:
+                continue
+            else:
+                yield String(s.rstrip("\x00")), insn.va
 
 
 def extract_insn_offset_features(f, bb, insn):
@@ -251,23 +355,38 @@ def extract_insn_offset_features(f, bb, insn):
     #
     #     .text:0040112F    cmp     [esi+4], ebx
     for oper in insn.opers:
+
         # this is for both x32 and x64
-        if not isinstance(oper, envi.archs.i386.disasm.i386RegMemOper):
-            continue
+        # like [esi + 4]
+        #       reg   ^
+        #             disp
+        if isinstance(oper, envi.archs.i386.disasm.i386RegMemOper):
+            if oper.reg == envi.archs.i386.disasm.REG_ESP:
+                continue
 
-        if oper.reg == envi.archs.i386.disasm.REG_ESP:
-            continue
+            if oper.reg == envi.archs.i386.disasm.REG_EBP:
+                continue
 
-        if oper.reg == envi.archs.i386.disasm.REG_EBP:
-            continue
+            # TODO: do x64 support for real.
+            if oper.reg == envi.archs.amd64.disasm.REG_RBP:
+                continue
 
-        # TODO: do x64 support for real.
-        if oper.reg == envi.archs.amd64.disasm.REG_RBP:
-            continue
+            # viv already decodes offsets as signed
+            v = oper.disp
 
-        # viv already decodes offsets as signed
+            yield Offset(v), insn.va
+            yield Offset(v, arch=get_arch(f.vw)), insn.va
 
-        yield Offset(oper.disp), insn.va
+        # like: [esi + ecx + 16384]
+        #        reg   ^     ^
+        #              index ^
+        #                    disp
+        elif isinstance(oper, envi.archs.i386.disasm.i386SibOper):
+            # viv already decodes offsets as signed
+            v = oper.disp
+
+            yield Offset(v), insn.va
+            yield Offset(v, arch=get_arch(f.vw)), insn.va
 
 
 def is_security_cookie(f, bb, insn):
@@ -303,7 +422,7 @@ def extract_insn_nzxor_characteristic_features(f, bb, insn):
     parse non-zeroing XOR instruction from the given instruction.
     ignore expected non-zeroing XORs, e.g. security cookies.
     """
-    if insn.mnem != "xor":
+    if insn.mnem not in ("xor", "xorpd", "xorps", "pxor"):
         return
 
     if insn.opers[0] == insn.opers[1]:
@@ -329,7 +448,9 @@ def extract_insn_peb_access_characteristic_features(f, bb, insn):
     if insn.mnem not in ["push", "mov"]:
         return
 
-    if "fs" in insn.getPrefixName():
+    prefix = insn.getPrefixName()
+
+    if "fs" in prefix:
         for oper in insn.opers:
             # examples
             #
@@ -342,10 +463,12 @@ def extract_insn_peb_access_characteristic_features(f, bb, insn):
                 isinstance(oper, envi.archs.i386.disasm.i386ImmMemOper) and oper.imm == 0x30
             ):
                 yield Characteristic("peb access"), insn.va
-    elif "gs" in insn.getPrefixName():
+    elif "gs" in prefix:
         for oper in insn.opers:
-            if (isinstance(oper, envi.archs.amd64.disasm.i386RegMemOper) and oper.disp == 0x60) or (
-                isinstance(oper, envi.archs.amd64.disasm.i386ImmMemOper) and oper.imm == 0x60
+            if (
+                (isinstance(oper, envi.archs.amd64.disasm.i386RegMemOper) and oper.disp == 0x60)
+                or (isinstance(oper, envi.archs.amd64.disasm.i386SibOper) and oper.imm == 0x60)
+                or (isinstance(oper, envi.archs.amd64.disasm.i386ImmMemOper) and oper.imm == 0x60)
             ):
                 yield Characteristic("peb access"), insn.va
     else:

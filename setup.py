@@ -11,36 +11,66 @@ import sys
 
 import setuptools
 
-requirements = ["six", "tqdm", "pyyaml", "tabulate", "colorama", "termcolor", "ruamel.yaml"]
+requirements = [
+    "six",
+    "tqdm",
+    "pyyaml",
+    "tabulate",
+    "colorama",
+    "termcolor",
+    "ruamel.yaml",
+    "wcwidth",
+    "ida-settings==2.1.0",
+]
 
 if sys.version_info >= (3, 0):
     # py3
+    requirements.append("halo")
     requirements.append("networkx")
+    requirements.append("smda==1.5.9")
 else:
     # py2
-    requirements.append("enum34")
-    requirements.append("vivisect @ https://github.com/williballenthin/vivisect/tarball/v0.0.20200708#egg=vivisect")
+    requirements.append("enum34==1.1.6")  # v1.1.6 is needed by halo 0.0.30 / spinners 0.0.24
+    requirements.append("halo==0.0.30")  # halo==0.0.30 is the last version to support py2.7
+    requirements.append("vivisect==0.1.0")
     requirements.append("viv-utils")
     requirements.append("networkx==2.2")  # v2.2 is last version supported by Python 2.7
+    requirements.append("backports.functools-lru-cache")
 
 # this sets __version__
 # via: http://stackoverflow.com/a/7071358/87207
 # and: http://stackoverflow.com/a/2073599/87207
-with open(os.path.join("capa", "version.py"), "rb") as f:
+with open(os.path.join("capa", "version.py"), "r") as f:
     exec(f.read())
+
+
+# via: https://packaging.python.org/guides/making-a-pypi-friendly-readme/
+this_directory = os.path.abspath(os.path.dirname(__file__))
+with open(os.path.join(this_directory, "README.md"), "r") as f:
+    long_description = f.read()
 
 
 setuptools.setup(
     name="flare-capa",
     version=__version__,
     description="The FLARE team's open-source tool to identify capabilities in executable files.",
-    long_description="",
+    long_description=long_description,
+    long_description_content_type="text/markdown",
     author="Willi Ballenthin, Moritz Raabe",
     author_email="william.ballenthin@mandiant.com, moritz.raabe@mandiant.com",
     url="https://www.github.com/fireeye/capa",
+    project_urls={
+        "Documentation": "https://github.com/fireeye/capa/tree/master/doc",
+        "Rules": "https://github.com/fireeye/capa-rules",
+        "Rules Documentation": "https://github.com/fireeye/capa-rules/tree/master/doc",
+    },
     packages=setuptools.find_packages(exclude=["tests"]),
     package_dir={"capa": "capa"},
-    entry_points={"console_scripts": ["capa=capa.main:main",]},
+    entry_points={
+        "console_scripts": [
+            "capa=capa.main:main",
+        ]
+    },
     include_package_data=True,
     install_requires=requirements,
     extras_require={
@@ -55,12 +85,15 @@ setuptools.setup(
         ]
     },
     zip_safe=False,
-    keywords="capa",
+    keywords="capa malware analysis capability detection FLARE",
     classifiers=[
-        "Development Status :: 3 - Alpha",
+        "Development Status :: 5 - Production/Stable",
         "Intended Audience :: Developers",
+        "Intended Audience :: Information Technology",
+        "License :: OSI Approved :: Apache Software License",
         "Natural Language :: English",
-        "Programming Language :: Python :: 2",
+        "Programming Language :: Python :: 2.7",
         "Programming Language :: Python :: 3",
+        "Topic :: Security",
     ],
 )
