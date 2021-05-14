@@ -35,20 +35,19 @@ def location_to_hex(location):
 class CapaExplorerDataItem(object):
     """store data for CapaExplorerDataModel"""
 
-    def __init__(self, parent, data):
+    def __init__(self, parent, data, can_check=True):
         """initialize item"""
         self.pred = parent
         self._data = data
         self.children = []
         self._checked = False
+        self._can_check = can_check
 
         # default state for item
-        self.flags = (
-            QtCore.Qt.ItemIsEnabled
-            | QtCore.Qt.ItemIsSelectable
-            | QtCore.Qt.ItemIsTristate
-            | QtCore.Qt.ItemIsUserCheckable
-        )
+        self.flags = QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable
+
+        if self._can_check:
+            self.flags = self.flags | QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsTristate
 
         if self.pred:
             self.pred.appendChild(self)
@@ -69,6 +68,10 @@ class CapaExplorerDataItem(object):
         @param checked: True, item checked, False item not checked
         """
         self._checked = checked
+
+    def canCheck(self):
+        """ """
+        return self._can_check
 
     def isChecked(self):
         """get item is checked"""
@@ -165,7 +168,7 @@ class CapaExplorerRuleItem(CapaExplorerDataItem):
 
     fmt = "%s (%d matches)"
 
-    def __init__(self, parent, name, namespace, count, source):
+    def __init__(self, parent, name, namespace, count, source, can_check=True):
         """initialize item
 
         @param parent: parent node
@@ -175,7 +178,7 @@ class CapaExplorerRuleItem(CapaExplorerDataItem):
         @param source: rule source (tooltip)
         """
         display = self.fmt % (name, count) if count > 1 else name
-        super(CapaExplorerRuleItem, self).__init__(parent, [display, "", namespace])
+        super(CapaExplorerRuleItem, self).__init__(parent, [display, "", namespace], can_check)
         self._source = source
 
     @property
@@ -199,7 +202,7 @@ class CapaExplorerRuleMatchItem(CapaExplorerDataItem):
 
     @property
     def source(self):
-        """ return rule contents for display """
+        """return rule contents for display"""
         return self._source
 
 
@@ -208,14 +211,14 @@ class CapaExplorerFunctionItem(CapaExplorerDataItem):
 
     fmt = "function(%s)"
 
-    def __init__(self, parent, location):
+    def __init__(self, parent, location, can_check=True):
         """initialize item
 
         @param parent: parent node
         @param location: virtual address of function as seen by IDA
         """
         super(CapaExplorerFunctionItem, self).__init__(
-            parent, [self.fmt % idaapi.get_name(location), location_to_hex(location), ""]
+            parent, [self.fmt % idaapi.get_name(location), location_to_hex(location), ""], can_check
         )
 
     @property
@@ -325,14 +328,10 @@ class CapaExplorerByteViewItem(CapaExplorerFeatureItem):
         """
         byte_snap = idaapi.get_bytes(location, 32)
 
+        details = ""
         if byte_snap:
             byte_snap = codecs.encode(byte_snap, "hex").upper()
-            if sys.version_info >= (3, 0):
-                details = " ".join([byte_snap[i : i + 2].decode() for i in range(0, len(byte_snap), 2)])
-            else:
-                details = " ".join([byte_snap[i : i + 2] for i in range(0, len(byte_snap), 2)])
-        else:
-            details = ""
+            details = " ".join([byte_snap[i : i + 2].decode() for i in range(0, len(byte_snap), 2)])
 
         super(CapaExplorerByteViewItem, self).__init__(parent, display, location=location, details=details)
         self.ida_highlight = idc.get_color(location, idc.CIC_ITEM)

@@ -6,6 +6,7 @@
 #  is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and limitations under the License.
 
+import re
 import uuid
 import codecs
 import logging
@@ -17,7 +18,8 @@ try:
 except ImportError:
     from backports.functools_lru_cache import lru_cache
 
-import six
+import io
+
 import yaml
 import ruamel.yaml
 
@@ -243,7 +245,7 @@ def parse_description(s, value_type, description=None):
     """
     s can be an int or a string
     """
-    if value_type != "string" and isinstance(s, six.string_types) and DESCRIPTION_SEPARATOR in s:
+    if value_type != "string" and isinstance(s, str) and DESCRIPTION_SEPARATOR in s:
         if description:
             raise InvalidRule(
                 'unexpected value: "%s", only one description allowed (inline description with `%s`)'
@@ -255,12 +257,11 @@ def parse_description(s, value_type, description=None):
     else:
         value = s
 
-    if isinstance(value, six.string_types):
+    if isinstance(value, str):
         if value_type == "bytes":
             try:
                 value = codecs.decode(value.replace(" ", ""), "hex")
-            # TODO: Remove TypeError when Python2 is not used anymore
-            except (TypeError, binascii.Error):
+            except binascii.Error:
                 raise InvalidRule('unexpected bytes value: "%s", must be a valid hex sequence' % value)
 
             if len(value) > MAX_BYTES_FEATURE_SIZE:
@@ -405,7 +406,7 @@ def build_statements(d, scope):
             return Range(feature, min=min, max=max, description=description)
         else:
             raise InvalidRule("unexpected range: %s" % (count))
-    elif key == "string" and not isinstance(d[key], six.string_types):
+    elif key == "string" and not isinstance(d[key], str):
         raise InvalidRule("ambiguous string value %s, must be defined as explicit string" % d[key])
     else:
         Feature = parse_feature(key)
@@ -600,6 +601,9 @@ class Rule(object):
         # use block mode, not inline json-like mode
         y.default_flow_style = False
 
+        # leave quotes unchanged
+        y.preserve_quotes = True
+
         # indent lists by two spaces below their parent
         #
         #     features:
@@ -614,16 +618,20 @@ class Rule(object):
         return y
 
     @classmethod
-    def from_yaml(cls, s):
-        # use pyyaml because it can be much faster than ruamel (pure python)
-        doc = yaml.load(s, Loader=cls._get_yaml_loader())
+    def from_yaml(cls, s, use_ruamel=False):
+        if use_ruamel:
+            # ruamel enables nice formatting and doc roundtripping with comments
+            doc = cls._get_ruamel_yaml_parser().load(s)
+        else:
+            # use pyyaml because it can be much faster than ruamel (pure python)
+            doc = yaml.load(s, Loader=cls._get_yaml_loader())
         return cls.from_dict(doc, s)
 
     @classmethod
-    def from_yaml_file(cls, path):
+    def from_yaml_file(cls, path, use_ruamel=False):
         with open(path, "rb") as f:
             try:
-                return cls.from_yaml(f.read().decode("utf-8"))
+                return cls.from_yaml(f.read().decode("utf-8"), use_ruamel=use_ruamel)
             except InvalidRule as e:
                 raise InvalidRuleWithPath(path, str(e))
 
@@ -691,7 +699,7 @@ class Rule(object):
         for key in hidden_meta.keys():
             del meta[key]
 
-        ostream = six.BytesIO()
+        ostream = io.BytesIO()
         self._get_ruamel_yaml_parser().dump(definition, ostream)
 
         for key, value in hidden_meta.items():
@@ -716,7 +724,20 @@ class Rule(object):
         # tweaking `ruamel.indent()` doesn't quite give us the control we want.
         # so, add the two extra spaces that we've determined we need through experimentation.
         # see #263
-        doc = doc.replace("  description:", "    description:")
+        # only do this for the features section, so the meta description doesn't get reformatted
+        # assumes features section always exists
+        features_offset = doc.find("features")
+        doc = doc[:features_offset] + doc[features_offset:].replace("  description:", "    description:")
+
+        # for negative hex numbers, yaml dump outputs:
+        # - offset: !!int '0x-30'
+        # we prefer:
+        # - offset: -0x30
+        # the below regex makes these adjustments and while ugly, we don't have to explore the ruamel.yaml insides
+        doc = re.sub(r"!!int '0x-([0-9a-fA-F]+)'", r"-0x\1", doc)
+
+        # normalize CRLF to LF
+        doc = doc.replace("\r\n", "\n")
         return doc
 
 
@@ -866,7 +887,8 @@ class RuleSet(object):
         given a collection of rules, collect the rules that are needed at the given scope.
         these rules are ordered topologically.
 
-        don't include "lib" rules, unless they are dependencies of other rules.
+        don't include auto-generated "subscope" rules.
+        we want to include general "lib" rules here - even if they are not dependencies of other rules, see #398
         """
         scope_rules = set([])
 
@@ -875,7 +897,7 @@ class RuleSet(object):
         #  at lower scope, e.g. function scope.
         # so, we find all dependencies of all rules, and later will filter them down.
         for rule in rules:
-            if rule.meta.get("lib", False):
+            if rule.meta.get("capa/subscope-rule", False):
                 continue
 
             scope_rules.update(get_rules_and_dependencies(rules, rule.name))
@@ -916,7 +938,7 @@ class RuleSet(object):
         rules_filtered = set([])
         for rule in rules:
             for k, v in rule.meta.items():
-                if isinstance(v, six.string_types) and tag in v:
+                if isinstance(v, str) and tag in v:
                     logger.debug('using rule "%s" and dependencies, found tag in meta.%s: %s', rule.name, k, v)
                     rules_filtered.update(set(capa.rules.get_rules_and_dependencies(rules, rule.name)))
                     break

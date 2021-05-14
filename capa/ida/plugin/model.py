@@ -6,7 +6,7 @@
 #  is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and limitations under the License.
 
-from collections import deque
+from collections import deque, defaultdict
 
 import idc
 import idaapi
@@ -110,6 +110,8 @@ class CapaExplorerDataModel(QtCore.QAbstractItemModel):
 
         if role == QtCore.Qt.CheckStateRole and column == CapaExplorerDataModel.COLUMN_INDEX_RULE_INFORMATION:
             # inform view how to display content of checkbox - un/checked
+            if not item.canCheck():
+                return None
             return QtCore.Qt.Checked if item.isChecked() else QtCore.Qt.Unchecked
 
         if role == QtCore.Qt.FontRole and column in (
@@ -424,14 +426,28 @@ class CapaExplorerDataModel(QtCore.QAbstractItemModel):
         for child in match.get("children", []):
             self.render_capa_doc_match(parent2, child, doc)
 
-    def render_capa_doc(self, doc):
-        """render capa features specified in doc
+    def render_capa_doc_by_function(self, doc):
+        """ """
+        matches_by_function = {}
+        for rule in rutils.capability_rules(doc):
+            for ea in rule["matches"].keys():
+                ea = capa.ida.helpers.get_func_start_ea(ea)
+                if ea is None:
+                    # file scope, skip for rendering in this mode
+                    continue
+                if None is matches_by_function.get(ea, None):
+                    matches_by_function[ea] = CapaExplorerFunctionItem(self.root_node, ea, can_check=False)
+                CapaExplorerRuleItem(
+                    matches_by_function[ea],
+                    rule["meta"]["name"],
+                    rule["meta"].get("namespace"),
+                    len(rule["matches"]),
+                    rule["source"],
+                    can_check=False,
+                )
 
-        @param doc: capa result doc
-        """
-        # inform model that changes are about to occur
-        self.beginResetModel()
-
+    def render_capa_doc_by_program(self, doc):
+        """ """
         for rule in rutils.capability_rules(doc):
             rule_name = rule["meta"]["name"]
             rule_namespace = rule["meta"].get("namespace")
@@ -451,6 +467,19 @@ class CapaExplorerDataModel(QtCore.QAbstractItemModel):
 
                 self.render_capa_doc_match(parent2, match, doc)
 
+    def render_capa_doc(self, doc, by_function):
+        """render capa features specified in doc
+
+        @param doc: capa result doc
+        """
+        # inform model that changes are about to occur
+        self.beginResetModel()
+
+        if by_function:
+            self.render_capa_doc_by_function(doc)
+        else:
+            self.render_capa_doc_by_program(doc)
+
         # inform model changes have ended
         self.endResetModel()
 
@@ -459,13 +488,17 @@ class CapaExplorerDataModel(QtCore.QAbstractItemModel):
 
         @param feature: capa feature read from doc
         """
-        if feature[feature["type"]]:
+        key = feature["type"]
+        value = feature[feature["type"]]
+        if value:
+            if key == "string":
+                value = '"%s"' % capa.features.escape_string(value)
             if feature.get("description", ""):
-                return "%s(%s = %s)" % (feature["type"], feature[feature["type"]], feature["description"])
+                return "%s(%s = %s)" % (key, value, feature["description"])
             else:
-                return "%s(%s)" % (feature["type"], feature[feature["type"]])
+                return "%s(%s)" % (key, value)
         else:
-            return "%s" % feature["type"]
+            return "%s" % key
 
     def render_capa_doc_feature_node(self, parent, feature, locations, doc):
         """process capa doc feature node
@@ -522,7 +555,9 @@ class CapaExplorerDataModel(QtCore.QAbstractItemModel):
             )
 
         if feature["type"] == "regex":
-            return CapaExplorerStringViewItem(parent, display, location, feature["match"])
+            return CapaExplorerStringViewItem(
+                parent, display, location, '"%s"' % capa.features.escape_string(feature["match"])
+            )
 
         if feature["type"] == "basicblock":
             return CapaExplorerBlockItem(parent, location)
@@ -547,7 +582,9 @@ class CapaExplorerDataModel(QtCore.QAbstractItemModel):
 
         if feature["type"] in ("string",):
             # display string preview
-            return CapaExplorerStringViewItem(parent, display, location, feature[feature["type"]])
+            return CapaExplorerStringViewItem(
+                parent, display, location, '"%s"' % capa.features.escape_string(feature[feature["type"]])
+            )
 
         if feature["type"] in ("import", "export"):
             # display no preview

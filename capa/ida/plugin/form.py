@@ -7,8 +7,10 @@
 # See the License for the specific language governing permissions and limitations under the License.
 
 import os
+import copy
 import json
 import logging
+import itertools
 import collections
 
 import idaapi
@@ -22,13 +24,110 @@ import capa.ida.helpers
 import capa.render.utils as rutils
 import capa.features.extractors.ida
 from capa.ida.plugin.icon import QICON
-from capa.ida.plugin.view import CapaExplorerQtreeView
+from capa.ida.plugin.view import (
+    CapaExplorerQtreeView,
+    CapaExplorerRulgenEditor,
+    CapaExplorerRulgenPreview,
+    CapaExplorerRulegenFeatures,
+)
 from capa.ida.plugin.hooks import CapaExplorerIdaHooks
 from capa.ida.plugin.model import CapaExplorerDataModel
 from capa.ida.plugin.proxy import CapaExplorerRangeProxyModel, CapaExplorerSearchProxyModel
 
 logger = logging.getLogger(__name__)
 settings = ida_settings.IDASettings("capa")
+
+CAPA_SETTINGS_RULE_PATH = "rule_path"
+CAPA_SETTINGS_RULEGEN_AUTHOR = "rulegen_author"
+CAPA_SETTINGS_RULEGEN_SCOPE = "rulegen_scope"
+
+
+def write_file(path, data):
+    """ """
+    if os.path.exists(path) and 1 != idaapi.ask_yn(1, "The file already exists. Overwrite?"):
+        return
+    with open(path, "wb") as save_file:
+        save_file.write(data)
+
+
+def trim_function_name(f, max_length=25):
+    """ """
+    n = idaapi.get_name(f.start_ea)
+    if len(n) > max_length:
+        n = "%s..." % n[:max_length]
+    return n
+
+
+def find_func_features(f, extractor):
+    """ """
+    func_features = collections.defaultdict(set)
+    bb_features = collections.defaultdict(dict)
+
+    for (feature, ea) in extractor.extract_function_features(f):
+        func_features[feature].add(ea)
+
+    for bb in extractor.get_basic_blocks(f):
+        _bb_features = collections.defaultdict(set)
+
+        for (feature, ea) in extractor.extract_basic_block_features(f, bb):
+            _bb_features[feature].add(ea)
+            func_features[feature].add(ea)
+
+        for insn in extractor.get_instructions(f, bb):
+            for (feature, ea) in extractor.extract_insn_features(f, bb, insn):
+                _bb_features[feature].add(ea)
+                func_features[feature].add(ea)
+
+        bb_features[int(bb)] = _bb_features
+
+    return func_features, bb_features
+
+
+def find_func_matches(f, ruleset, func_features, bb_features):
+    """ """
+    func_matches = collections.defaultdict(list)
+    bb_matches = collections.defaultdict(list)
+
+    # create copy of function features, to add rule matches for basic blocks
+    func_features = collections.defaultdict(set, copy.copy(func_features))
+
+    # find rule matches for basic blocks
+    for (bb, features) in bb_features.items():
+        _, matches = capa.engine.match(ruleset.basic_block_rules, features, bb)
+        for (name, res) in matches.items():
+            bb_matches[name].extend(res)
+            for (ea, _) in res:
+                func_features[capa.features.MatchedRule(name)].add(ea)
+
+    # find rule matches for function, function features include rule matches for basic blocks
+    _, matches = capa.engine.match(ruleset.function_rules, func_features, int(f))
+    for (name, res) in matches.items():
+        func_matches[name].extend(res)
+
+    return func_matches, bb_matches
+
+
+def find_file_features(extractor):
+    """ """
+    file_features = collections.defaultdict(set)
+    for (feature, ea) in extractor.extract_file_features():
+        if ea:
+            file_features[feature].add(ea)
+        else:
+            if feature not in file_features:
+                file_features[feature] = set()
+    return file_features
+
+
+def find_file_matches(ruleset, file_features):
+    """ """
+    _, matches = capa.engine.match(ruleset.file_rules, file_features, 0x0)
+    return matches
+
+
+def update_wait_box(text):
+    """update the IDA wait box"""
+    ida_kernwin.replace_wait_box("capa explorer...%s" % text)
 
 
 class UserCancelledError(Exception):
@@ -71,6 +170,60 @@ class CapaExplorerFeatureExtractor(capa.features.extractors.ida.IdaFeatureExtrac
         return super(CapaExplorerFeatureExtractor, self).extract_function_features(f)
 
 
+class QLineEditClicked(QtWidgets.QLineEdit):
+    def __init__(self, content, parent=None):
+        """ """
+        super(QLineEditClicked, self).__init__(content, parent)
+
+    def mouseReleaseEvent(self, e):
+        """ """
+        old = self.text()
+        new = str(
+            QtWidgets.QFileDialog.getExistingDirectory(
+                self.parent(), "Please select a capa rules directory", settings.user.get(CAPA_SETTINGS_RULE_PATH, "")
+            )
+        )
+        if new:
+            self.setText(new)
+        else:
+            self.setText(old)
+
+
+class CapaSettingsInputDialog(QtWidgets.QDialog):
+    def __init__(self, title, parent=None):
+        """ """
+        super(CapaSettingsInputDialog, self).__init__(parent)
+
+        self.setWindowTitle(title)
+        self.setMinimumWidth(500)
+        self.setWindowFlags(self.windowFlags() & ~QtCore.Qt.WindowContextHelpButtonHint)
+
+        self.edit_rule_path = QLineEditClicked(settings.user.get(CAPA_SETTINGS_RULE_PATH, ""))
+        self.edit_rule_author = QtWidgets.QLineEdit(settings.user.get(CAPA_SETTINGS_RULEGEN_AUTHOR, ""))
+        self.edit_rule_scope = QtWidgets.QComboBox()
+
+        scopes = ("file", "function", "basic block")
+
+        self.edit_rule_scope.addItems(scopes)
+        self.edit_rule_scope.setCurrentIndex(scopes.index(settings.user.get(CAPA_SETTINGS_RULEGEN_SCOPE, "function")))
+
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel, self)
+
+        layout = QtWidgets.QFormLayout(self)
+        layout.addRow("capa rules path", self.edit_rule_path)
+        layout.addRow("Default rule author", self.edit_rule_author)
+        layout.addRow("Default rule scope", self.edit_rule_scope)
+
+        layout.addWidget(buttons)
+
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+    def get_values(self):
+        """ """
+        return self.edit_rule_path.text(), self.edit_rule_author.text(), self.edit_rule_scope.currentText()
+
+
 class CapaExplorerForm(idaapi.PluginForm):
     """form element for plugin interface"""
 
@@ -79,13 +232,15 @@ class CapaExplorerForm(idaapi.PluginForm):
         super(CapaExplorerForm, self).__init__()
 
         self.form_title = name
-        self.rule_path = ""
         self.process_total = 0
         self.process_count = 0
 
         self.parent = None
         self.ida_hooks = None
         self.doc = None
+
+        self.rules_cache = None
+        self.ruleset_cache = None
 
         # models
         self.model_data = None
@@ -94,15 +249,29 @@ class CapaExplorerForm(idaapi.PluginForm):
 
         # UI controls
         self.view_limit_results_by_function = None
+        self.view_show_results_by_function = None
         self.view_search_bar = None
         self.view_tree = None
-        self.view_attack = None
+        self.view_rulegen = None
         self.view_tabs = None
-        self.view_menu_bar = None
+        self.view_tab_rulegen = None
         self.view_status_label = None
         self.view_buttons = None
         self.view_analyze_button = None
         self.view_reset_button = None
+        self.view_settings_button = None
+        self.view_save_button = None
+
+        self.view_rulegen_preview = None
+        self.view_rulegen_features = None
+        self.view_rulegen_editor = None
+        self.view_rulegen_header_label = None
+        self.view_rulegen_search = None
+        self.rulegen_current_function = None
+        self.rulegen_bb_features_cache = {}
+        self.rulegen_func_features_cache = {}
+        self.rulegen_file_features_cache = {}
+        self.view_rulegen_status_label = None
 
         self.Show()
 
@@ -113,6 +282,7 @@ class CapaExplorerForm(idaapi.PluginForm):
         """
         self.parent = self.FormToPyQtWidget(form)
         self.parent.setWindowIcon(QICON)
+
         self.load_interface()
         self.load_ida_hooks()
 
@@ -150,58 +320,24 @@ class CapaExplorerForm(idaapi.PluginForm):
         self.search_model_proxy.setSourceModel(self.range_model_proxy)
 
         self.view_tree = CapaExplorerQtreeView(self.search_model_proxy, self.parent)
-        self.load_view_attack()
 
         # load parent tab and children tab views
         self.load_view_tabs()
         self.load_view_checkbox_limit_by()
+        self.load_view_checkbox_show_matches_by_function()
         self.load_view_search_bar()
         self.load_view_tree_tab()
-        self.load_view_attack_tab()
+        self.load_view_rulegen_tab()
         self.load_view_status_label()
         self.load_view_buttons()
 
-        # load menu bar and sub menus
-        self.load_view_menu_bar()
-        self.load_file_menu()
-        self.load_rules_menu()
-
         # load parent view
         self.load_view_parent()
-
-        self.disable_controls()
 
     def load_view_tabs(self):
         """load tabs"""
         tabs = QtWidgets.QTabWidget()
         self.view_tabs = tabs
-
-    def load_view_menu_bar(self):
-        """load menu bar"""
-        bar = QtWidgets.QMenuBar()
-        self.view_menu_bar = bar
-
-    def load_view_attack(self):
-        """load MITRE ATT&CK table"""
-        table_headers = [
-            "ATT&CK Tactic",
-            "ATT&CK Technique ",
-        ]
-
-        table = QtWidgets.QTableWidget()
-
-        table.setColumnCount(len(table_headers))
-        table.verticalHeader().setVisible(False)
-        table.setSortingEnabled(False)
-        table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        table.setFocusPolicy(QtCore.Qt.NoFocus)
-        table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
-        table.setHorizontalHeaderLabels(table_headers)
-        table.horizontalHeader().setDefaultAlignment(QtCore.Qt.AlignLeft)
-        table.setShowGrid(False)
-        table.setStyleSheet("QTableWidget::item { padding: 25px; }")
-
-        self.view_attack = table
 
     def load_view_checkbox_limit_by(self):
         """load limit results by function checkbox"""
@@ -210,6 +346,14 @@ class CapaExplorerForm(idaapi.PluginForm):
         check.stateChanged.connect(self.slot_checkbox_limit_by_changed)
 
         self.view_limit_results_by_function = check
+
+    def load_view_checkbox_show_matches_by_function(self):
+        """load limit results by function checkbox"""
+        check = QtWidgets.QCheckBox("Show matches by function")
+        check.setChecked(False)
+        check.stateChanged.connect(self.slot_checkbox_show_results_by_function_changed)
+
+        self.view_show_results_by_function = check
 
     def load_view_status_label(self):
         """load status label"""
@@ -222,20 +366,26 @@ class CapaExplorerForm(idaapi.PluginForm):
     def load_view_buttons(self):
         """load the button controls"""
         analyze_button = QtWidgets.QPushButton("Analyze")
-        analyze_button.setToolTip("Run capa analysis on IDB")
         reset_button = QtWidgets.QPushButton("Reset")
-        reset_button.setToolTip("Reset capa explorer and IDA user interfaces")
+        save_button = QtWidgets.QPushButton("Save")
+        settings_button = QtWidgets.QPushButton("Settings")
 
         analyze_button.clicked.connect(self.slot_analyze)
         reset_button.clicked.connect(self.slot_reset)
+        save_button.clicked.connect(self.slot_save)
+        settings_button.clicked.connect(self.slot_settings)
 
         layout = QtWidgets.QHBoxLayout()
         layout.addWidget(analyze_button)
         layout.addWidget(reset_button)
-        layout.addStretch(1)
+        layout.addWidget(settings_button)
+        layout.addStretch(3)
+        layout.addWidget(save_button, alignment=QtCore.Qt.AlignRight)
 
         self.view_analyze_button = analyze_button
         self.view_reset_button = reset_button
+        self.view_settings_button = settings_button
+        self.view_save_button = save_button
         self.view_buttons = layout
 
     def load_view_search_bar(self):
@@ -251,76 +401,106 @@ class CapaExplorerForm(idaapi.PluginForm):
         layout = QtWidgets.QVBoxLayout()
 
         layout.addWidget(self.view_tabs)
-        layout.addWidget(self.view_status_label)
         layout.addLayout(self.view_buttons)
-        layout.setMenuBar(self.view_menu_bar)
+        layout.addWidget(self.view_status_label)
 
         self.parent.setLayout(layout)
 
     def load_view_tree_tab(self):
         """load tree view tab"""
+        layout2 = QtWidgets.QHBoxLayout()
+        layout2.addWidget(self.view_limit_results_by_function)
+        layout2.addWidget(self.view_show_results_by_function)
+
+        checkboxes = QtWidgets.QWidget()
+        checkboxes.setLayout(layout2)
+
         layout = QtWidgets.QVBoxLayout()
-        layout.addWidget(self.view_limit_results_by_function)
+        layout.addWidget(checkboxes)
         layout.addWidget(self.view_search_bar)
         layout.addWidget(self.view_tree)
 
         tab = QtWidgets.QWidget()
         tab.setLayout(layout)
 
-        self.view_tabs.addTab(tab, "Tree View")
+        self.view_tabs.addTab(tab, "Program Analysis")
 
-    def load_view_attack_tab(self):
-        """load MITRE ATT&CK view tab"""
-        layout = QtWidgets.QVBoxLayout()
-        layout.addWidget(self.view_attack)
+    def load_view_rulegen_tab(self):
+        """ """
+        layout = QtWidgets.QHBoxLayout()
+        layout1 = QtWidgets.QVBoxLayout()
+        layout2 = QtWidgets.QVBoxLayout()
+        layout3 = QtWidgets.QVBoxLayout()
+
+        right_top = QtWidgets.QWidget()
+        right_top.setLayout(layout1)
+        right_bottom = QtWidgets.QWidget()
+        right_bottom.setLayout(layout3)
+
+        left = QtWidgets.QWidget()
+        left.setLayout(layout2)
+
+        font = QtGui.QFont()
+        font.setBold(True)
+        font.setPointSize(11)
+
+        label1 = QtWidgets.QLabel()
+        label1.setAlignment(QtCore.Qt.AlignLeft)
+        label1.setText("Preview")
+        label1.setFont(font)
+
+        label2 = QtWidgets.QLabel()
+        label2.setAlignment(QtCore.Qt.AlignLeft)
+        label2.setText("Editor")
+        label2.setFont(font)
+
+        self.view_rulegen_status_label = QtWidgets.QLabel()
+        self.view_rulegen_status_label.setAlignment(QtCore.Qt.AlignLeft)
+        self.view_rulegen_status_label.setText("")
+
+        self.view_rulegen_search = QtWidgets.QLineEdit()
+        self.view_rulegen_search.setPlaceholderText("search...")
+        self.view_rulegen_search.setClearButtonEnabled(True)
+        self.view_rulegen_search.textChanged.connect(self.slot_limit_rulegen_features_to_search)
+
+        self.view_rulegen_header_label = QtWidgets.QLabel()
+        self.view_rulegen_header_label.setAlignment(QtCore.Qt.AlignLeft)
+        self.view_rulegen_header_label.setText("Features")
+        self.view_rulegen_header_label.setFont(font)
+
+        self.view_rulegen_preview = CapaExplorerRulgenPreview(parent=self.parent)
+        self.view_rulegen_editor = CapaExplorerRulgenEditor(self.view_rulegen_preview, parent=self.parent)
+        self.view_rulegen_features = CapaExplorerRulegenFeatures(self.view_rulegen_editor, parent=self.parent)
+
+        self.view_rulegen_preview.textChanged.connect(self.slot_rulegen_preview_update)
+        self.view_rulegen_editor.updated.connect(self.slot_rulegen_editor_update)
+
+        self.set_rulegen_preview_border_neutral()
+
+        layout1.addWidget(label1)
+        layout1.addWidget(self.view_rulegen_preview, 45)
+        layout1.addWidget(self.view_rulegen_status_label)
+        layout3.addWidget(label2)
+        layout3.addWidget(self.view_rulegen_editor, 65)
+
+        layout2.addWidget(self.view_rulegen_header_label)
+        layout2.addWidget(self.view_rulegen_search)
+        layout2.addWidget(self.view_rulegen_features)
+
+        splitter2 = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        splitter2.addWidget(right_top)
+        splitter2.addWidget(right_bottom)
+
+        splitter1 = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        splitter1.addWidget(left)
+        splitter1.addWidget(splitter2)
+
+        layout.addWidget(splitter1)
 
         tab = QtWidgets.QWidget()
         tab.setLayout(layout)
 
-        self.view_tabs.addTab(tab, "MITRE")
-
-    def load_file_menu(self):
-        """load file menu controls"""
-        actions = (("Export results...", "Export capa results as JSON file", self.slot_export_json),)
-        self.load_menu("File", actions)
-
-    def load_rules_menu(self):
-        """load rules menu controls"""
-        actions = (("Change rules directory...", "Select new rules directory", self.slot_change_rules_dir),)
-        self.load_menu("Rules", actions)
-
-    def load_menu(self, title, actions):
-        """load menu actions
-
-        @param title: menu name displayed in UI
-        @param actions: tuple of tuples containing action name, tooltip, and slot function
-        """
-        menu = self.view_menu_bar.addMenu(title)
-        for (name, _, slot) in actions:
-            action = QtWidgets.QAction(name, self.parent)
-            action.triggered.connect(slot)
-            menu.addAction(action)
-
-    def slot_export_json(self):
-        """export capa results as JSON file"""
-        if not self.doc:
-            idaapi.info("No capa results to export.")
-            return
-
-        path = idaapi.ask_file(True, "*.json", "Choose file")
-
-        # user cancelled, entered blank input, etc.
-        if not path:
-            return
-
-        # check file exists, ask to override
-        if os.path.exists(path) and 1 != idaapi.ask_yn(1, "The selected file already exists. Overwrite?"):
-            return
-
-        with open(path, "wb") as export_file:
-            export_file.write(
-                json.dumps(self.doc, sort_keys=True, cls=capa.render.CapaJsonObjectEncoder).encode("utf-8")
-            )
+        self.view_tabs.addTab(tab, "Rule Generator")
 
     def load_ida_hooks(self):
         """load IDA UI hooks"""
@@ -363,6 +543,11 @@ class CapaExplorerForm(idaapi.PluginForm):
             # pre action so save current name for replacement later
             meta["prev_name"] = curr_name
 
+    def update_view_tree_limit_results_to_function(self, ea):
+        """ """
+        self.limit_results_to_function(idaapi.get_func(ea))
+        self.view_tree.reset_ui()
+
     def ida_hook_screen_ea_changed(self, widget, new_ea, old_ea):
         """function hook for IDA "screen ea changed" action
 
@@ -373,20 +558,22 @@ class CapaExplorerForm(idaapi.PluginForm):
         @param new_ea: destination ea
         @param old_ea: source ea
         """
-        if not self.view_limit_results_by_function.isChecked():
-            # ignore if limit checkbox not selected
+        if not self.view_tabs.currentIndex() in (0, 1):
             return
 
         if idaapi.get_widget_type(widget) != idaapi.BWN_DISASM:
             # ignore views not the assembly view
             return
 
+        if not idaapi.get_func(new_ea):
+            return
+
         if idaapi.get_func(new_ea) == idaapi.get_func(old_ea):
             # user navigated same function - ignore
             return
 
-        self.limit_results_to_function(idaapi.get_func(new_ea))
-        self.view_tree.reset_ui()
+        if self.view_tabs.currentIndex() == 0 and self.view_limit_results_by_function.isChecked():
+            return self.update_view_tree_limit_results_to_function(new_ea)
 
     def ida_hook_rebase(self, meta, post=False):
         """function hook for IDA "RebaseProgram" action
@@ -404,58 +591,22 @@ class CapaExplorerForm(idaapi.PluginForm):
             meta["prev_base"] = idaapi.get_imagebase()
             self.model_data.reset()
 
-    def load_capa_results(self):
-        """run capa analysis and render results in UI
-
-        note: this function must always return, exception or not, in order for plugin to safely close the IDA
-        wait box
-        """
-        # new analysis, new doc
-        self.doc = None
-        self.process_total = 0
-        self.process_count = 1
-
-        def update_wait_box(text):
-            """update the IDA wait box"""
-            ida_kernwin.replace_wait_box("capa explorer...%s" % text)
-
-        def slot_progress_feature_extraction(text):
-            """slot function to handle feature extraction progress updates"""
-            update_wait_box("%s (%d of %d)" % (text, self.process_count, self.process_total))
-            self.process_count += 1
-
-        extractor = CapaExplorerFeatureExtractor()
-        extractor.indicator.progress.connect(slot_progress_feature_extraction)
-
-        update_wait_box("calculating analysis")
-
-        try:
-            self.process_total += len(tuple(extractor.get_functions()))
-        except Exception as e:
-            logger.error("Failed to calculate analysis (error: %s).", e)
-            return False
-
-        if ida_kernwin.user_cancelled():
-            logger.info("User cancelled analysis.")
-            return False
-
-        update_wait_box("loading rules")
+    def load_capa_rules(self):
+        """ """
+        self.ruleset_cache = None
+        self.rules_cache = None
 
         try:
             # resolve rules directory - check self and settings first, then ask user
-            if not self.rule_path:
-                if "rule_path" in settings and os.path.exists(settings["rule_path"]):
-                    self.rule_path = settings["rule_path"]
-                else:
-                    idaapi.info("Please select a file directory containing capa rules.")
-                    rule_path = self.ask_user_directory()
-                    if not rule_path:
-                        logger.warning(
-                            "You must select a file directory containing capa rules before analysis can be run. The standard collection of capa rules can be downloaded from https://github.com/fireeye/capa-rules."
-                        )
-                        return False
-                    self.rule_path = rule_path
-                    settings.user["rule_path"] = rule_path
+            if not os.path.exists(settings.user.get(CAPA_SETTINGS_RULE_PATH, "")):
+                idaapi.info("Please select a file directory containing capa rules.")
+                path = self.ask_user_directory()
+                if not path:
+                    logger.warning(
+                        "You must select a file directory containing capa rules before analysis can be run. The standard collection of capa rules can be downloaded from https://github.com/fireeye/capa-rules."
+                    )
+                    return False
+                settings.user[CAPA_SETTINGS_RULE_PATH] = path
         except Exception as e:
             logger.error("Failed to load capa rules (error: %s).", e)
             return False
@@ -464,9 +615,9 @@ class CapaExplorerForm(idaapi.PluginForm):
             logger.info("User cancelled analysis.")
             return False
 
-        rule_path = self.rule_path
-
+        rule_path = settings.user[CAPA_SETTINGS_RULE_PATH]
         try:
+            # TODO refactor: this first part is identical to capa.main.get_rules
             if not os.path.exists(rule_path):
                 raise IOError("rule path %s does not exist or cannot be accessed" % rule_path)
 
@@ -482,8 +633,8 @@ class CapaExplorerForm(idaapi.PluginForm):
                         continue
                     for file in files:
                         if not file.endswith(".yml"):
-                            if not (file.endswith(".md") or file.endswith(".git") or file.endswith(".txt")):
-                                # expect to see readme.md, format.md, and maybe a .git directory
+                            if not (file.startswith(".git") or file.endswith((".git", ".md", ".txt"))):
+                                # expect to see .git* files, readme.md, format.md, and maybe a .git directory
                                 # other things maybe are rules, but are mis-named.
                                 logger.warning("skipping non-.yml file: %s", file)
                             continue
@@ -493,7 +644,10 @@ class CapaExplorerForm(idaapi.PluginForm):
             rules = []
             total_paths = len(rule_paths)
             for (i, rule_path) in enumerate(rule_paths):
-                update_wait_box("loading capa rules from %s (%d of %d)" % (self.rule_path, i + 1, total_paths))
+                update_wait_box(
+                    "loading capa rules from %s (%d of %d)"
+                    % (settings.user[CAPA_SETTINGS_RULE_PATH], i + 1, total_paths)
+                )
                 if ida_kernwin.user_cancelled():
                     raise UserCancelledError("user cancelled")
                 try:
@@ -505,144 +659,132 @@ class CapaExplorerForm(idaapi.PluginForm):
                     if capa.main.is_nursery_rule_path(rule_path):
                         rule.meta["capa/nursery"] = True
                     rules.append(rule)
-
-            rule_count = len(rules)
-            rules = capa.rules.RuleSet(rules)
+            _rules = copy.copy(rules)
+            ruleset = capa.rules.RuleSet(_rules)
         except UserCancelledError:
             logger.info("User cancelled analysis.")
             return False
         except Exception as e:
-            capa.ida.helpers.inform_user_ida_ui("Failed to load capa rules from %s" % self.rule_path)
-            logger.error("Failed to load rules from %s (error: %s).", self.rule_path, e)
+            capa.ida.helpers.inform_user_ida_ui(
+                "Failed to load capa rules from %s" % settings.user[CAPA_SETTINGS_RULE_PATH]
+            )
+            logger.error("Failed to load rules from %s (error: %s).", settings.user[CAPA_SETTINGS_RULE_PATH], e)
             logger.error(
                 "Make sure your file directory contains properly formatted capa rules. You can download the standard collection of capa rules from https://github.com/fireeye/capa-rules."
             )
-            self.rule_path = ""
-            settings.user.del_value("rule_path")
+            settings.user[CAPA_SETTINGS_RULE_PATH] = ""
             return False
 
-        if ida_kernwin.user_cancelled():
-            logger.info("User cancelled analysis.")
-            return False
+        self.ruleset_cache = ruleset
+        self.rules_cache = rules
 
-        update_wait_box("extracting features")
+        return True
+
+    def load_capa_results(self, use_cache=False):
+        """run capa analysis and render results in UI
+
+        note: this function must always return, exception or not, in order for plugin to safely close the IDA
+        wait box
+        """
+        if not use_cache:
+            # new analysis, new doc
+            self.doc = None
+            self.process_total = 0
+            self.process_count = 1
+
+            def slot_progress_feature_extraction(text):
+                """slot function to handle feature extraction progress updates"""
+                update_wait_box("%s (%d of %d)" % (text, self.process_count, self.process_total))
+                self.process_count += 1
+
+            extractor = CapaExplorerFeatureExtractor()
+            extractor.indicator.progress.connect(slot_progress_feature_extraction)
+
+            update_wait_box("calculating analysis")
+
+            try:
+                self.process_total += len(tuple(extractor.get_functions()))
+            except Exception as e:
+                logger.error("Failed to calculate analysis (error: %s).", e)
+                return False
+
+            if ida_kernwin.user_cancelled():
+                logger.info("User cancelled analysis.")
+                return False
+
+            update_wait_box("loading rules")
+
+            if not self.load_capa_rules():
+                return False
+
+            if ida_kernwin.user_cancelled():
+                logger.info("User cancelled analysis.")
+                return False
+
+            update_wait_box("extracting features")
+
+            try:
+                meta = capa.ida.helpers.collect_metadata()
+                capabilities, counts = capa.main.find_capabilities(self.ruleset_cache, extractor, disable_progress=True)
+                meta["analysis"].update(counts)
+            except UserCancelledError:
+                logger.info("User cancelled analysis.")
+                return False
+            except Exception as e:
+                logger.error("Failed to extract capabilities from database (error: %s)", e)
+                return False
+
+            update_wait_box("checking for file limitations")
+
+            try:
+                # support binary files specifically for x86/AMD64 shellcode
+                # warn user binary file is loaded but still allow capa to process it
+                # TODO: check specific architecture of binary files based on how user configured IDA processors
+                if idaapi.get_file_type_name() == "Binary file":
+                    logger.warning("-" * 80)
+                    logger.warning(" Input file appears to be a binary file.")
+                    logger.warning(" ")
+                    logger.warning(
+                        " capa currently only supports analyzing binary files containing x86/AMD64 shellcode with IDA."
+                    )
+                    logger.warning(
+                        " This means the results may be misleading or incomplete if the binary file loaded in IDA is not x86/AMD64."
+                    )
+                    logger.warning(
+                        " If you don't know the input file type, you can try using the `file` utility to guess it."
+                    )
+                    logger.warning("-" * 80)
+
+                    capa.ida.helpers.inform_user_ida_ui("capa encountered file type warnings during analysis")
+
+                if capa.main.has_file_limitation(self.ruleset_cache, capabilities, is_standalone=False):
+                    capa.ida.helpers.inform_user_ida_ui("capa encountered file limitation warnings during analysis")
+            except Exception as e:
+                logger.error("Failed to check for file limitations (error: %s)", e)
+                return False
+
+            if ida_kernwin.user_cancelled():
+                logger.info("User cancelled analysis.")
+                return False
+
+            update_wait_box("rendering results")
+
+            try:
+                self.doc = capa.render.convert_capabilities_to_result_document(meta, self.ruleset_cache, capabilities)
+            except Exception as e:
+                logger.error("Failed to render results (error: %s)", e)
+                return False
 
         try:
-            meta = capa.ida.helpers.collect_metadata()
-            capabilities, counts = capa.main.find_capabilities(rules, extractor, disable_progress=True)
-            meta["analysis"].update(counts)
-        except UserCancelledError:
-            logger.info("User cancelled analysis.")
-            return False
-        except Exception as e:
-            logger.error("Failed to extract capabilities from database (error: %s)", e)
-            return False
-
-        update_wait_box("checking for file limitations")
-
-        try:
-            # support binary files specifically for x86/AMD64 shellcode
-            # warn user binary file is loaded but still allow capa to process it
-            # TODO: check specific architecture of binary files based on how user configured IDA processors
-            if idaapi.get_file_type_name() == "Binary file":
-                logger.warning("-" * 80)
-                logger.warning(" Input file appears to be a binary file.")
-                logger.warning(" ")
-                logger.warning(
-                    " capa currently only supports analyzing binary files containing x86/AMD64 shellcode with IDA."
-                )
-                logger.warning(
-                    " This means the results may be misleading or incomplete if the binary file loaded in IDA is not x86/AMD64."
-                )
-                logger.warning(
-                    " If you don't know the input file type, you can try using the `file` utility to guess it."
-                )
-                logger.warning("-" * 80)
-
-                capa.ida.helpers.inform_user_ida_ui("capa encountered file type warnings during analysis")
-
-            if capa.main.has_file_limitation(rules, capabilities, is_standalone=False):
-                capa.ida.helpers.inform_user_ida_ui("capa encountered file limitation warnings during analysis")
-        except Exception as e:
-            logger.error("Failed to check for file limitations (error: %s)", e)
-            return False
-
-        if ida_kernwin.user_cancelled():
-            logger.info("User cancelled analysis.")
-            return False
-
-        update_wait_box("rendering results")
-
-        try:
-            self.doc = capa.render.convert_capabilities_to_result_document(meta, rules, capabilities)
-            self.model_data.render_capa_doc(self.doc)
-            self.render_capa_doc_mitre_summary()
-            self.enable_controls()
-            self.set_view_status_label("capa rules directory: %s (%d rules)" % (self.rule_path, rule_count))
+            self.model_data.render_capa_doc(self.doc, self.view_show_results_by_function.isChecked())
+            self.set_view_status_label(
+                "capa rules directory: %s (%d rules)" % (settings.user[CAPA_SETTINGS_RULE_PATH], len(self.rules_cache))
+            )
         except Exception as e:
             logger.error("Failed to render results (error: %s)", e)
             return False
 
         return True
-
-    def render_capa_doc_mitre_summary(self):
-        """render MITRE ATT&CK results"""
-        tactics = collections.defaultdict(set)
-
-        for rule in rutils.capability_rules(self.doc):
-            if not rule["meta"].get("att&ck"):
-                continue
-
-            for attack in rule["meta"]["att&ck"]:
-                tactic, _, rest = attack.partition("::")
-                if "::" in rest:
-                    technique, _, rest = rest.partition("::")
-                    subtechnique, _, id = rest.rpartition(" ")
-                    tactics[tactic].add((technique, subtechnique, id))
-                else:
-                    technique, _, id = rest.rpartition(" ")
-                    tactics[tactic].add((technique, id))
-
-        column_one = []
-        column_two = []
-
-        for (tactic, techniques) in sorted(tactics.items()):
-            column_one.append(tactic.upper())
-            # add extra space when more than one technique
-            column_one.extend(["" for i in range(len(techniques) - 1)])
-
-            for spec in sorted(techniques):
-                if len(spec) == 2:
-                    technique, id = spec
-                    column_two.append("%s %s" % (technique, id))
-                elif len(spec) == 3:
-                    technique, subtechnique, id = spec
-                    column_two.append("%s::%s %s" % (technique, subtechnique, id))
-                else:
-                    raise RuntimeError("unexpected ATT&CK spec format")
-
-        self.view_attack.setRowCount(max(len(column_one), len(column_two)))
-
-        for (row, value) in enumerate(column_one):
-            self.view_attack.setItem(row, 0, self.render_new_table_header_item(value))
-
-        for (row, value) in enumerate(column_two):
-            self.view_attack.setItem(row, 1, QtWidgets.QTableWidgetItem(value))
-
-        # resize columns to content
-        self.view_attack.resizeColumnsToContents()
-
-    def render_new_table_header_item(self, text):
-        """create new table header item with our style
-
-        @param text: header text to display
-        """
-        item = QtWidgets.QTableWidgetItem(text)
-        item.setForeground(QtGui.QColor(37, 147, 215))
-        font = QtGui.QFont()
-        font.setBold(True)
-        item.setFont(font)
-        return item
 
     def reset_view_tree(self):
         """reset tree view UI controls
@@ -650,23 +792,20 @@ class CapaExplorerForm(idaapi.PluginForm):
         called when user selects plugin reset from menu
         """
         self.view_limit_results_by_function.setChecked(False)
+        # self.view_show_results_by_function.setChecked(False)
         self.view_search_bar.setText("")
         self.view_tree.reset_ui()
 
-    def slot_analyze(self):
-        """run capa analysis and reload UI controls
-
-        called when user selects plugin reload from menu
-        """
+    def analyze_program(self, use_cache=False):
+        """ """
         self.range_model_proxy.invalidate()
         self.search_model_proxy.invalidate()
         self.model_data.reset()
         self.model_data.clear()
-        self.disable_controls()
         self.set_view_status_label("Loading...")
 
         ida_kernwin.show_wait_box("capa explorer")
-        success = self.load_capa_results()
+        success = self.load_capa_results(use_cache)
         ida_kernwin.hide_wait_box()
 
         self.reset_view_tree()
@@ -677,14 +816,333 @@ class CapaExplorerForm(idaapi.PluginForm):
         else:
             logger.info("Analysis completed.")
 
-    def slot_reset(self, checked):
+    def load_capa_function_results(self):
+        """ """
+        if not self.rules_cache or not self.ruleset_cache:
+            # only reload rules if caches are empty
+            if not self.load_capa_rules():
+                return False
+        else:
+            logger.info('Using cached ruleset, click "Reset" to reload rules from disk.')
+
+        if ida_kernwin.user_cancelled():
+            logger.info("User cancelled analysis.")
+            return False
+        update_wait_box("loading IDA extractor")
+
+        try:
+            # must use extractor to get function, as capa analysis requires casted object
+            extractor = CapaExplorerFeatureExtractor()
+        except Exception as e:
+            logger.error("Failed to load IDA feature extractor (error: %s)" % e)
+            return False
+
+        if ida_kernwin.user_cancelled():
+            logger.info("User cancelled analysis.")
+            return False
+        update_wait_box("extracting function features")
+
+        try:
+            f = idaapi.get_func(idaapi.get_screen_ea())
+            if f:
+                f = extractor.get_function(f.start_ea)
+                self.rulegen_current_function = f
+
+                func_features, bb_features = find_func_features(f, extractor)
+                self.rulegen_func_features_cache = collections.defaultdict(set, copy.copy(func_features))
+                self.rulegen_bb_features_cache = collections.defaultdict(dict, copy.copy(bb_features))
+
+                if ida_kernwin.user_cancelled():
+                    logger.info("User cancelled analysis.")
+                    return False
+                update_wait_box("matching function/basic block rule scope")
+
+                try:
+                    # add function and bb rule matches to function features, for display purposes
+                    func_matches, bb_matches = find_func_matches(f, self.ruleset_cache, func_features, bb_features)
+                    for (name, res) in itertools.chain(func_matches.items(), bb_matches.items()):
+                        rule = self.ruleset_cache[name]
+                        if rule.meta.get("capa/subscope-rule"):
+                            continue
+                        for (ea, _) in res:
+                            func_features[capa.features.MatchedRule(name)].add(ea)
+                except Exception as e:
+                    logger.error("Failed to match function/basic block rule scope (error: %s)" % e)
+                    return False
+            else:
+                func_features = {}
+        except UserCancelledError:
+            logger.info("User cancelled analysis.")
+            return False
+        except Exception as e:
+            logger.error("Failed to extract function features (error: %s)" % e)
+            return False
+
+        if ida_kernwin.user_cancelled():
+            logger.info("User cancelled analysis.")
+            return False
+        update_wait_box("extracting file features")
+
+        try:
+            file_features = find_file_features(extractor)
+            self.rulegen_file_features_cache = collections.defaultdict(dict, copy.copy(file_features))
+
+            if ida_kernwin.user_cancelled():
+                logger.info("User cancelled analysis.")
+                return False
+            update_wait_box("matching file rule scope")
+
+            try:
+                # add file matches to file features, for display purposes
+                for (name, res) in find_file_matches(self.ruleset_cache, file_features).items():
+                    rule = self.ruleset_cache[name]
+                    if rule.meta.get("capa/subscope-rule"):
+                        continue
+                    for (ea, _) in res:
+                        file_features[capa.features.MatchedRule(name)].add(ea)
+            except Exception as e:
+                logger.error("Failed to match file scope rules (error: %s)" % e)
+                return False
+        except Exception as e:
+            logger.error("Failed to extract file features (error: %s)" % e)
+            return False
+
+        if ida_kernwin.user_cancelled():
+            logger.info("User cancelled analysis.")
+            return False
+        update_wait_box("rendering views")
+
+        try:
+            # load preview and feature tree
+            self.view_rulegen_preview.load_preview_meta(
+                f.start_ea if f else None,
+                settings.user.get(CAPA_SETTINGS_RULEGEN_AUTHOR, "<insert_author>"),
+                settings.user.get(CAPA_SETTINGS_RULEGEN_SCOPE, "function"),
+            )
+            self.view_rulegen_features.load_features(file_features, func_features)
+
+            # self.view_rulegen_header_label.setText("Function Features (%s)" % trim_function_name(f))
+            self.set_view_status_label(
+                "capa rules directory: %s (%d rules)" % (settings.user[CAPA_SETTINGS_RULE_PATH], len(self.rules_cache))
+            )
+        except Exception as e:
+            logger.error("Failed to render views (error: %s)" % e)
+            return False
+
+        return True
+
+    def analyze_function(self):
+        """ """
+        self.reset_function_analysis_views(is_analyze=True)
+        self.set_view_status_label("Loading...")
+
+        ida_kernwin.show_wait_box("capa explorer")
+        success = self.load_capa_function_results()
+        ida_kernwin.hide_wait_box()
+
+        if not success:
+            self.set_view_status_label("Click Analyze to get started...")
+            logger.info("Analysis failed.")
+        else:
+            logger.info("Analysis completed.")
+
+    def reset_program_analysis_views(self):
+        """ """
+        logger.info("Resetting program analysis views.")
+
+        self.model_data.reset()
+        self.reset_view_tree()
+
+        self.rules_cache = None
+        self.ruleset_cache = None
+
+        logger.info("Reset completed.")
+
+    def reset_function_analysis_views(self, is_analyze=False):
+        """ """
+        logger.info("Resetting rule generator views.")
+
+        # self.view_rulegen_header_label.setText("Features")
+        self.view_rulegen_features.reset_view()
+        self.view_rulegen_editor.reset_view()
+        self.view_rulegen_preview.reset_view()
+        self.view_rulegen_search.clear()
+        self.set_rulegen_preview_border_neutral()
+        self.rulegen_current_function = None
+        self.rulegen_func_features_cache = {}
+        self.rulegen_bb_features_cache = {}
+        self.rulegen_file_features_cache = {}
+        self.view_rulegen_status_label.clear()
+
+        if not is_analyze:
+            # clear rules and ruleset cache only if user clicked "Reset"
+            self.rules_cache = None
+            self.ruleset_cache = None
+
+            self.set_view_status_label("Click Analyze to get started...")
+
+        logger.info("Reset completed.")
+
+    def set_rulegen_status(self, e):
+        """ """
+        self.view_rulegen_status_label.setText(e)
+
+    def set_rulegen_preview_border_error(self):
+        """ """
+        self.view_rulegen_preview.setStyleSheet("border: 3px solid red")
+
+    def set_rulegen_preview_border_neutral(self):
+        """ """
+        self.view_rulegen_preview.setStyleSheet("border: 3px solid grey")
+
+    def set_rulegen_preview_border_warn(self):
+        """ """
+        self.view_rulegen_preview.setStyleSheet("border: 3px solid yellow")
+
+    def set_rulegen_preview_border_success(self):
+        """ """
+        self.view_rulegen_preview.setStyleSheet("border: 3px solid green")
+
+    def update_rule_status(self, rule_text):
+        """ """
+        if self.view_rulegen_editor.root is None:
+            self.set_rulegen_preview_border_neutral()
+            self.view_rulegen_status_label.clear()
+            return
+
+        self.set_rulegen_preview_border_error()
+
+        try:
+            rule = capa.rules.Rule.from_yaml(rule_text)
+        except Exception as e:
+            self.set_rulegen_status("Failed to compile rule (%s)" % e)
+            return
+
+        # create deep copy of current rules, add our new rule
+        rules = copy.copy(self.rules_cache)
+
+        # ensure subscope rules are included
+        for sub in rule.extract_subscope_rules():
+            rules.append(sub)
+
+        # include our new rule in the list
+        rules.append(rule)
+
+        try:
+            file_features = copy.copy(self.rulegen_file_features_cache)
+            if self.rulegen_current_function:
+                func_matches, bb_matches = find_func_matches(
+                    self.rulegen_current_function,
+                    capa.rules.RuleSet(list(capa.rules.get_rules_and_dependencies(rules, rule.name))),
+                    self.rulegen_func_features_cache,
+                    self.rulegen_bb_features_cache,
+                )
+                file_features.update(copy.copy(self.rulegen_func_features_cache))
+            else:
+                func_matches = {}
+                bb_matches = {}
+
+            _, file_matches = capa.engine.match(
+                capa.rules.RuleSet(list(capa.rules.get_rules_and_dependencies(rules, rule.name))).file_rules,
+                file_features,
+                0x0,
+            )
+        except Exception as e:
+            self.set_rulegen_status("Failed to match rule (%s)" % e)
+            return
+
+        if tuple(
+            filter(
+                lambda m: m[0] == rule.name,
+                itertools.chain(file_matches.items(), func_matches.items(), bb_matches.items()),
+            )
+        ):
+            # made it here, rule compiled and match was found
+            self.set_rulegen_preview_border_success()
+            self.set_rulegen_status("Rule compiled and matched")
+        else:
+            # made it here, rule compiled but no match found, may be intended so we warn user
+            self.set_rulegen_preview_border_warn()
+            self.set_rulegen_status("Rule compiled, but not matched")
+
+    def slot_rulegen_editor_update(self):
+        """ """
+        rule_text = self.view_rulegen_preview.toPlainText()
+        self.update_rule_status(rule_text)
+
+    def slot_rulegen_preview_update(self):
+        """ """
+        rule_text = self.view_rulegen_preview.toPlainText()
+        self.view_rulegen_editor.load_features_from_yaml(rule_text, False)
+        self.update_rule_status(rule_text)
+
+    def slot_limit_rulegen_features_to_search(self, text):
+        """ """
+        self.view_rulegen_features.filter_items_by_text(text)
+
+    def slot_analyze(self):
+        """run capa analysis and reload UI controls
+
+        called when user selects plugin reload from menu
+        """
+        if self.view_tabs.currentIndex() == 0:
+            self.analyze_program()
+        elif self.view_tabs.currentIndex() == 1:
+            self.analyze_function()
+
+    def slot_reset(self):
         """reset UI elements
 
         e.g. checkboxes and IDA highlighting
         """
-        self.model_data.reset()
-        self.reset_view_tree()
-        logger.info("Reset completed.")
+        if self.view_tabs.currentIndex() == 0:
+            self.reset_program_analysis_views()
+        elif self.view_tabs.currentIndex() == 1:
+            self.reset_function_analysis_views()
+
+    def slot_save(self):
+        """ """
+        if self.view_tabs.currentIndex() == 0:
+            self.save_program_analysis()
+        elif self.view_tabs.currentIndex() == 1:
+            self.save_function_analysis()
+
+    def slot_settings(self):
+        """ """
+        dialog = CapaSettingsInputDialog("capa explorer settings", parent=self.parent)
+        if dialog.exec_():
+            (
+                settings.user[CAPA_SETTINGS_RULE_PATH],
+                settings.user[CAPA_SETTINGS_RULEGEN_AUTHOR],
+                settings.user[CAPA_SETTINGS_RULEGEN_SCOPE],
+            ) = dialog.get_values()
+
+    def save_program_analysis(self):
+        """ """
+        if not self.doc:
+            idaapi.info("No program analysis to save.")
+            return
+
+        s = json.dumps(self.doc, sort_keys=True, cls=capa.render.CapaJsonObjectEncoder).encode("utf-8")
+
+        path = idaapi.ask_file(True, "*.json", "Choose file to save capa program analysis JSON")
+        if not path:
+            return
+
+        write_file(path, s)
+
+    def save_function_analysis(self):
+        """ """
+        s = self.view_rulegen_preview.toPlainText().encode("utf-8")
+        if not s:
+            idaapi.info("No rule to save.")
+            return
+
+        path = self.ask_user_capa_rule_file()
+        if not path:
+            return
+
+        write_file(path, s)
 
     def slot_checkbox_limit_by_changed(self, state):
         """slot activated if checkbox clicked
@@ -699,6 +1157,16 @@ class CapaExplorerForm(idaapi.PluginForm):
             self.range_model_proxy.reset_address_range_filter()
 
         self.view_tree.reset_ui()
+
+    def slot_checkbox_show_results_by_function_changed(self, state):
+        """slot activated if checkbox clicked
+
+        if checked, configure function filter if screen location is located in function, otherwise clear filter
+
+        @param state: checked state
+        """
+        if self.doc:
+            self.analyze_program(use_cache=True)
 
     def limit_results_to_function(self, f):
         """add filter to limit results to current function
@@ -726,25 +1194,15 @@ class CapaExplorerForm(idaapi.PluginForm):
         """create Qt dialog to ask user for a directory"""
         return str(
             QtWidgets.QFileDialog.getExistingDirectory(
-                self.parent, "Please select a capa rules directory", self.rule_path
+                self.parent, "Please select a capa rules directory", settings.user.get(CAPA_SETTINGS_RULE_PATH, "")
             )
         )
 
-    def slot_change_rules_dir(self):
-        """allow user to change rules directory
-
-        user selection stored in settings for future runs
-        """
-        rule_path = self.ask_user_directory()
-        if not rule_path:
-            logger.warning("No rule directory selected, nothing to do.")
-            return
-
-        self.rule_path = rule_path
-        settings.user["rule_path"] = rule_path
-
-        if 1 == idaapi.ask_yn(1, "Run analysis now?"):
-            self.slot_analyze()
+    def ask_user_capa_rule_file(self):
+        """ """
+        return QtWidgets.QFileDialog.getSaveFileName(
+            None, "Please select a capa rule to edit", settings.user.get(CAPA_SETTINGS_RULE_PATH, ""), "*.yml"
+        )[0]
 
     def set_view_status_label(self, text):
         """update status label control
@@ -752,15 +1210,3 @@ class CapaExplorerForm(idaapi.PluginForm):
         @param text: updated text
         """
         self.view_status_label.setText(text)
-
-    def disable_controls(self):
-        """disable form controls"""
-        self.view_reset_button.setEnabled(False)
-        self.view_tabs.setTabEnabled(0, False)
-        self.view_tabs.setTabEnabled(1, False)
-
-    def enable_controls(self):
-        """enable form controls"""
-        self.view_reset_button.setEnabled(True)
-        self.view_tabs.setTabEnabled(0, True)
-        self.view_tabs.setTabEnabled(1, True)

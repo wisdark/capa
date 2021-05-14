@@ -282,7 +282,8 @@ def test_lib_rules():
             ),
         ]
     )
-    assert len(rules.function_rules) == 1
+    # lib rules are added to the rule set
+    assert len(rules.function_rules) == 2
 
 
 def test_subscope_rules():
@@ -678,6 +679,25 @@ def test_explicit_string_values_int():
     children = list(r.statement.get_children())
     assert (String("123") in children) == True
     assert (String("0x123") in children) == True
+
+
+def test_string_values_special_characters():
+    rule = textwrap.dedent(
+        """
+        rule:
+            meta:
+                name: test rule
+            features:
+                - or:
+                    - string: "hello\\r\\nworld"
+                    - string: "bye\\nbye"
+                      description: "test description"
+        """
+    )
+    r = capa.rules.Rule.from_yaml(rule)
+    children = list(r.statement.get_children())
+    assert (String("hello\r\nworld") in children) == True
+    assert (String("bye\nbye") in children) == True
 
 
 def test_regex_values_always_string():

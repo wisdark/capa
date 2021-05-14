@@ -71,41 +71,58 @@ import argparse
 import capa.main
 import capa.rules
 import capa.engine
+import capa.helpers
 import capa.features
 import capa.features.freeze
-import capa.features.extractors.viv
+
+logger = logging.getLogger("capa.show-features")
 
 
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
 
-    formats = [
-        ("auto", "(default) detect file type automatically"),
-        ("pe", "Windows PE file"),
-        ("sc32", "32-bit shellcode"),
-        ("sc64", "64-bit shellcode"),
-        ("freeze", "features previously frozen by capa"),
-    ]
-    format_help = ", ".join(["%s: %s" % (f[0], f[1]) for f in formats])
-
     parser = argparse.ArgumentParser(description="Show the features that capa extracts from the given sample")
-    parser.add_argument("sample", type=str, help="Path to sample to analyze")
-    parser.add_argument(
-        "-f", "--format", choices=[f[0] for f in formats], default="auto", help="Select sample format, %s" % format_help
-    )
+    capa.main.install_common_args(parser, wanted={"format", "sample", "signatures"})
+
     parser.add_argument("-F", "--function", type=lambda x: int(x, 0x10), help="Show features for specific function")
     args = parser.parse_args(args=argv)
+    capa.main.handle_common_args(args)
 
-    logging.basicConfig(level=logging.INFO)
-    logging.getLogger().setLevel(logging.INFO)
+    try:
+        taste = capa.helpers.get_file_taste(args.sample)
+    except IOError as e:
+        logger.error("%s", str(e))
+        return -1
 
-    if args.format == "freeze":
+    if (args.format == "freeze") or (args.format == "auto" and capa.features.freeze.is_freeze(taste)):
         with open(args.sample, "rb") as f:
             extractor = capa.features.freeze.load(f.read())
     else:
-        vw = capa.main.get_workspace(args.sample, args.format)
-        extractor = capa.features.extractors.viv.VivisectFeatureExtractor(vw, args.sample)
+        try:
+            extractor = capa.main.get_extractor(
+                args.sample, args.format, capa.main.BACKEND_VIV, sigpaths=args.signatures
+            )
+        except capa.main.UnsupportedFormatError:
+            logger.error("-" * 80)
+            logger.error(" Input file does not appear to be a PE file.")
+            logger.error(" ")
+            logger.error(
+                " capa currently only supports analyzing PE files (or shellcode, when using --format sc32|sc64)."
+            )
+            logger.error(" If you don't know the input file type, you can try using the `file` utility to guess it.")
+            logger.error("-" * 80)
+            return -1
+        except capa.main.UnsupportedRuntimeError:
+            logger.error("-" * 80)
+            logger.error(" Unsupported runtime or Python interpreter.")
+            logger.error(" ")
+            logger.error(" capa supports running under Python 2.7 using Vivisect for binary analysis.")
+            logger.error(" It can also run within IDA Pro, using either Python 2.7 or 3.5+.")
+            logger.error(" ")
+            logger.error(" If you're seeing this message on the command line, please ensure you're running Python 2.7.")
+            logger.error("-" * 80)
+            return -1
 
     if not args.function:
         for feature, va in extractor.extract_file_features():
@@ -118,15 +135,13 @@ def main(argv=None):
 
     if args.function:
         if args.format == "freeze":
-            functions = filter(lambda f: f == args.function, functions)
+            functions = tuple(filter(lambda f: f == args.function, functions))
         else:
-            functions = filter(lambda f: f.va == args.function, functions)
+            functions = tuple(filter(lambda f: int(f) == args.function, functions))
 
-            if args.function not in [f.va for f in functions]:
-                print("0x%X not a function, creating it" % args.function)
-                vw.makeFunction(args.function)
-                functions = extractor.get_functions()
-                functions = filter(lambda f: f.va == args.function, functions)
+            if args.function not in [int(f) for f in functions]:
+                print("0x%X not a function" % args.function)
+                return -1
 
         if len(functions) == 0:
             print("0x%X not a function")
@@ -154,7 +169,7 @@ def ida_main():
     functions = extractor.get_functions()
 
     if function:
-        functions = filter(lambda f: f.start_ea == function, functions)
+        functions = tuple(filter(lambda f: f.start_ea == function, functions))
 
         if len(functions) == 0:
             print("0x%X not a function" % function)
