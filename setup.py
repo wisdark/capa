@@ -21,7 +21,7 @@ requirements = [
     "viv-utils[flirt]==0.6.2",
     "halo==0.0.31",
     "networkx==2.5.1",
-    "ruamel.yaml==0.17.4",
+    "ruamel.yaml==0.17.9",
     "vivisect==1.0.3",
     "smda==1.5.14",
 ]
