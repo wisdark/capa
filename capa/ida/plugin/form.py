@@ -20,9 +20,12 @@ from PyQt5 import QtGui, QtCore, QtWidgets
 
 import capa.main
 import capa.rules
+import capa.engine
 import capa.ida.helpers
-import capa.render.utils as rutils
-import capa.features.extractors.ida
+import capa.render.json
+import capa.features.common
+import capa.render.result_document
+import capa.features.extractors.ida.extractor
 from capa.ida.plugin.icon import QICON
 from capa.ida.plugin.view import (
     CapaExplorerQtreeView,
@@ -41,11 +44,16 @@ CAPA_SETTINGS_RULE_PATH = "rule_path"
 CAPA_SETTINGS_RULEGEN_AUTHOR = "rulegen_author"
 CAPA_SETTINGS_RULEGEN_SCOPE = "rulegen_scope"
 
+from enum import IntFlag
+
+
+class Options(IntFlag):
+    DEFAULT = 0
+    ANALYZE = 1  # Runs the analysis when starting the explorer
+
 
 def write_file(path, data):
     """ """
-    if os.path.exists(path) and 1 != idaapi.ask_yn(1, "The file already exists. Overwrite?"):
-        return
     with open(path, "wb") as save_file:
         save_file.write(data)
 
@@ -97,7 +105,7 @@ def find_func_matches(f, ruleset, func_features, bb_features):
         for (name, res) in matches.items():
             bb_matches[name].extend(res)
             for (ea, _) in res:
-                func_features[capa.features.MatchedRule(name)].add(ea)
+                func_features[capa.features.common.MatchedRule(name)].add(ea)
 
     # find rule matches for function, function features include rule matches for basic blocks
     _, matches = capa.engine.match(ruleset.function_rules, func_features, int(f))
@@ -155,7 +163,7 @@ class CapaExplorerProgressIndicator(QtCore.QObject):
         self.progress.emit("extracting features from %s" % text)
 
 
-class CapaExplorerFeatureExtractor(capa.features.extractors.ida.IdaFeatureExtractor):
+class CapaExplorerFeatureExtractor(capa.features.extractors.ida.extractor.IdaFeatureExtractor):
     """subclass the IdaFeatureExtractor
 
     track progress during feature extraction, also allow user to cancel feature extraction
@@ -227,7 +235,7 @@ class CapaSettingsInputDialog(QtWidgets.QDialog):
 class CapaExplorerForm(idaapi.PluginForm):
     """form element for plugin interface"""
 
-    def __init__(self, name):
+    def __init__(self, name, option=Options.DEFAULT):
         """initialize form elements"""
         super(CapaExplorerForm, self).__init__()
 
@@ -267,6 +275,7 @@ class CapaExplorerForm(idaapi.PluginForm):
         self.view_rulegen_editor = None
         self.view_rulegen_header_label = None
         self.view_rulegen_search = None
+        self.view_rulegen_limit_features_by_ea = None
         self.rulegen_current_function = None
         self.rulegen_bb_features_cache = {}
         self.rulegen_func_features_cache = {}
@@ -274,6 +283,9 @@ class CapaExplorerForm(idaapi.PluginForm):
         self.view_rulegen_status_label = None
 
         self.Show()
+
+        if (option & Options.ANALYZE) == Options.ANALYZE:
+            self.analyze_program()
 
     def OnCreate(self, form):
         """called when plugin form is created
@@ -454,6 +466,10 @@ class CapaExplorerForm(idaapi.PluginForm):
         label2.setText("Editor")
         label2.setFont(font)
 
+        self.view_rulegen_limit_features_by_ea = QtWidgets.QCheckBox("Limit features to current dissasembly address")
+        self.view_rulegen_limit_features_by_ea.setChecked(False)
+        self.view_rulegen_limit_features_by_ea.stateChanged.connect(self.slot_checkbox_limit_features_by_ea)
+
         self.view_rulegen_status_label = QtWidgets.QLabel()
         self.view_rulegen_status_label.setAlignment(QtCore.Qt.AlignLeft)
         self.view_rulegen_status_label.setText("")
@@ -484,6 +500,7 @@ class CapaExplorerForm(idaapi.PluginForm):
         layout3.addWidget(self.view_rulegen_editor, 65)
 
         layout2.addWidget(self.view_rulegen_header_label)
+        layout2.addWidget(self.view_rulegen_limit_features_by_ea)
         layout2.addWidget(self.view_rulegen_search)
         layout2.addWidget(self.view_rulegen_features)
 
@@ -548,6 +565,10 @@ class CapaExplorerForm(idaapi.PluginForm):
         self.limit_results_to_function(idaapi.get_func(ea))
         self.view_tree.reset_ui()
 
+    def update_rulegen_tree_limit_features_to_selection(self, ea):
+        """ """
+        self.view_rulegen_features.filter_items_by_ea(ea)
+
     def ida_hook_screen_ea_changed(self, widget, new_ea, old_ea):
         """function hook for IDA "screen ea changed" action
 
@@ -567,6 +588,9 @@ class CapaExplorerForm(idaapi.PluginForm):
 
         if not idaapi.get_func(new_ea):
             return
+
+        if self.view_tabs.currentIndex() == 1 and self.view_rulegen_limit_features_by_ea.isChecked():
+            return self.update_rulegen_tree_limit_features_to_selection(new_ea)
 
         if idaapi.get_func(new_ea) == idaapi.get_func(old_ea):
             # user navigated same function - ignore
@@ -770,7 +794,9 @@ class CapaExplorerForm(idaapi.PluginForm):
             update_wait_box("rendering results")
 
             try:
-                self.doc = capa.render.convert_capabilities_to_result_document(meta, self.ruleset_cache, capabilities)
+                self.doc = capa.render.result_document.convert_capabilities_to_result_document(
+                    meta, self.ruleset_cache, capabilities
+                )
             except Exception as e:
                 logger.error("Failed to render results (error: %s)", e)
                 return False
@@ -865,7 +891,7 @@ class CapaExplorerForm(idaapi.PluginForm):
                         if rule.meta.get("capa/subscope-rule"):
                             continue
                         for (ea, _) in res:
-                            func_features[capa.features.MatchedRule(name)].add(ea)
+                            func_features[capa.features.common.MatchedRule(name)].add(ea)
                 except Exception as e:
                     logger.error("Failed to match function/basic block rule scope (error: %s)" % e)
                     return False
@@ -899,7 +925,7 @@ class CapaExplorerForm(idaapi.PluginForm):
                     if rule.meta.get("capa/subscope-rule"):
                         continue
                     for (ea, _) in res:
-                        file_features[capa.features.MatchedRule(name)].add(ea)
+                        file_features[capa.features.common.MatchedRule(name)].add(ea)
             except Exception as e:
                 logger.error("Failed to match file scope rules (error: %s)" % e)
                 return False
@@ -967,6 +993,7 @@ class CapaExplorerForm(idaapi.PluginForm):
         self.view_rulegen_editor.reset_view()
         self.view_rulegen_preview.reset_view()
         self.view_rulegen_search.clear()
+        self.view_rulegen_limit_features_by_ea.setChecked(False)
         self.set_rulegen_preview_border_neutral()
         self.rulegen_current_function = None
         self.rulegen_func_features_cache = {}
@@ -1123,9 +1150,9 @@ class CapaExplorerForm(idaapi.PluginForm):
             idaapi.info("No program analysis to save.")
             return
 
-        s = json.dumps(self.doc, sort_keys=True, cls=capa.render.CapaJsonObjectEncoder).encode("utf-8")
+        s = json.dumps(self.doc, sort_keys=True, cls=capa.render.json.CapaJsonObjectEncoder).encode("utf-8")
 
-        path = idaapi.ask_file(True, "*.json", "Choose file to save capa program analysis JSON")
+        path = self.ask_user_capa_json_file()
         if not path:
             return
 
@@ -1157,6 +1184,13 @@ class CapaExplorerForm(idaapi.PluginForm):
             self.range_model_proxy.reset_address_range_filter()
 
         self.view_tree.reset_ui()
+
+    def slot_checkbox_limit_features_by_ea(self, state):
+        """ """
+        if state == QtCore.Qt.Checked:
+            self.view_rulegen_features.filter_items_by_ea(idaapi.get_screen_ea())
+        else:
+            self.view_rulegen_features.show_all_items()
 
     def slot_checkbox_show_results_by_function_changed(self, state):
         """slot activated if checkbox clicked
@@ -1201,7 +1235,16 @@ class CapaExplorerForm(idaapi.PluginForm):
     def ask_user_capa_rule_file(self):
         """ """
         return QtWidgets.QFileDialog.getSaveFileName(
-            None, "Please select a capa rule to edit", settings.user.get(CAPA_SETTINGS_RULE_PATH, ""), "*.yml"
+            None,
+            "Please select a location to save capa rule file",
+            settings.user.get(CAPA_SETTINGS_RULE_PATH, ""),
+            "*.yml",
+        )[0]
+
+    def ask_user_capa_json_file(self):
+        """ """
+        return QtWidgets.QFileDialog.getSaveFileName(
+            None, "Please select a location to save capa JSON file", "", "*.json"
         )[0]
 
     def set_view_status_label(self, text):

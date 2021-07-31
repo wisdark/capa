@@ -12,8 +12,10 @@ import idc
 import idaapi
 from PyQt5 import QtGui, QtCore
 
+import capa.rules
 import capa.ida.helpers
 import capa.render.utils as rutils
+import capa.features.common
 from capa.ida.plugin.item import (
     CapaExplorerDataItem,
     CapaExplorerRuleItem,
@@ -433,12 +435,18 @@ class CapaExplorerDataModel(QtCore.QAbstractItemModel):
             for ea in rule["matches"].keys():
                 ea = capa.ida.helpers.get_func_start_ea(ea)
                 if ea is None:
-                    # file scope, skip for rendering in this mode
+                    # file scope, skip rendering in this mode
                     continue
-                if None is matches_by_function.get(ea, None):
-                    matches_by_function[ea] = CapaExplorerFunctionItem(self.root_node, ea, can_check=False)
+                if not matches_by_function.get(ea, ()):
+                    # new function root
+                    matches_by_function[ea] = (CapaExplorerFunctionItem(self.root_node, ea, can_check=False), [])
+                function_root, match_cache = matches_by_function[ea]
+                if rule["meta"]["name"] in match_cache:
+                    # rule match already rendered for this function root, skip it
+                    continue
+                match_cache.append(rule["meta"]["name"])
                 CapaExplorerRuleItem(
-                    matches_by_function[ea],
+                    function_root,
                     rule["meta"]["name"],
                     rule["meta"].get("namespace"),
                     len(rule["matches"]),
@@ -492,7 +500,7 @@ class CapaExplorerDataModel(QtCore.QAbstractItemModel):
         value = feature[feature["type"]]
         if value:
             if key == "string":
-                value = '"%s"' % capa.features.escape_string(value)
+                value = '"%s"' % capa.features.common.escape_string(value)
             if feature.get("description", ""):
                 return "%s(%s = %s)" % (key, value, feature["description"])
             else:
@@ -555,9 +563,14 @@ class CapaExplorerDataModel(QtCore.QAbstractItemModel):
             )
 
         if feature["type"] == "regex":
-            return CapaExplorerStringViewItem(
-                parent, display, location, '"%s"' % capa.features.escape_string(feature["match"])
-            )
+            for s, locations in feature["matches"].items():
+                if location in locations:
+                    return CapaExplorerStringViewItem(
+                        parent, display, location, '"' + capa.features.common.escape_string(s) + '"'
+                    )
+
+            # programming error: the given location should always be found in the regex matches
+            raise ValueError("regex match at location not found")
 
         if feature["type"] == "basicblock":
             return CapaExplorerBlockItem(parent, location)
@@ -583,12 +596,12 @@ class CapaExplorerDataModel(QtCore.QAbstractItemModel):
         if feature["type"] in ("string",):
             # display string preview
             return CapaExplorerStringViewItem(
-                parent, display, location, '"%s"' % capa.features.escape_string(feature[feature["type"]])
+                parent, display, location, '"%s"' % capa.features.common.escape_string(feature[feature["type"]])
             )
 
-        if feature["type"] in ("import", "export"):
+        if feature["type"] in ("import", "export", "function-name"):
             # display no preview
-            return CapaExplorerFeatureItem(parent, display=display)
+            return CapaExplorerFeatureItem(parent, location=location, display=display)
 
         raise RuntimeError("unexpected feature type: " + str(feature["type"]))
 
