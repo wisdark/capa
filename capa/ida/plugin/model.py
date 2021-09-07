@@ -562,7 +562,7 @@ class CapaExplorerDataModel(QtCore.QAbstractItemModel):
                 parent, display, source=doc["rules"].get(feature[feature["type"]], {}).get("source", "")
             )
 
-        if feature["type"] == "regex":
+        if feature["type"] in ("regex", "substring"):
             for s, locations in feature["matches"].items():
                 if location in locations:
                     return CapaExplorerStringViewItem(
@@ -602,6 +602,9 @@ class CapaExplorerDataModel(QtCore.QAbstractItemModel):
         if feature["type"] in ("import", "export", "function-name"):
             # display no preview
             return CapaExplorerFeatureItem(parent, location=location, display=display)
+
+        if feature["type"] in ("arch", "os", "format"):
+            return CapaExplorerFeatureItem(parent, display=display)
 
         raise RuntimeError("unexpected feature type: " + str(feature["type"]))
 

@@ -12,6 +12,8 @@ import datetime
 import idc
 import idaapi
 import idautils
+import ida_bytes
+import ida_loader
 
 import capa
 import capa.version
@@ -19,21 +21,23 @@ import capa.features.common
 
 logger = logging.getLogger("capa")
 
-SUPPORTED_IDA_VERSIONS = [
-    "7.1",
-    "7.2",
-    "7.3",
+# IDA version as returned by idaapi.get_kernel_version()
+SUPPORTED_IDA_VERSIONS = (
     "7.4",
     "7.5",
     "7.6",
-]
+)
 
-# file type names as returned by idaapi.get_file_type_name()
-SUPPORTED_FILE_TYPES = [
-    "Portable executable for 80386 (PE)",
-    "Portable executable for AMD64 (PE)",
-    "Binary file",  # x86/AMD64 shellcode support
-]
+# file type as returned by idainfo.file_type
+SUPPORTED_FILE_TYPES = (
+    idaapi.f_PE,
+    idaapi.f_ELF,
+    idaapi.f_BIN,
+    # idaapi.f_MACHO,
+)
+
+# arch type as returned by idainfo.procname
+SUPPORTED_ARCH_TYPES = ("metapc",)
 
 
 def inform_user_ida_ui(message):
@@ -53,15 +57,27 @@ def is_supported_ida_version():
 
 
 def is_supported_file_type():
-    file_type = idaapi.get_file_type_name()
-    if file_type not in SUPPORTED_FILE_TYPES:
+    file_info = idaapi.get_inf_structure()
+    if file_info.filetype not in SUPPORTED_FILE_TYPES:
         logger.error("-" * 80)
-        logger.error(" Input file does not appear to be a PE file.")
+        logger.error(" Input file does not appear to be a supported file type.")
         logger.error(" ")
         logger.error(
-            " capa currently only supports analyzing PE files (or binary files containing x86/AMD64 shellcode) with IDA."
+            " capa currently only supports analyzing PE, ELF, or binary files containing x86 (32- and 64-bit) shellcode."
         )
         logger.error(" If you don't know the input file type, you can try using the `file` utility to guess it.")
+        logger.error("-" * 80)
+        return False
+    return True
+
+
+def is_supported_arch_type():
+    file_info = idaapi.get_inf_structure()
+    if file_info.procname not in SUPPORTED_ARCH_TYPES or not any((file_info.is_32bit(), file_info.is_64bit())):
+        logger.error("-" * 80)
+        logger.error(" Input file does not appear to target a supported architecture.")
+        logger.error(" ")
+        logger.error(" capa currently only supports analyzing x86 (32- and 64-bit).")
         logger.error("-" * 80)
         return False
     return True
@@ -121,3 +137,30 @@ def collect_metadata():
         },
         "version": capa.version.__version__,
     }
+
+
+class IDAIO:
+    """
+    An object that acts as a file-like object,
+    using bytes from the current IDB workspace.
+    """
+
+    def __init__(self):
+        super(IDAIO, self).__init__()
+        self.offset = 0
+
+    def seek(self, offset, whence=0):
+        assert whence == 0
+        self.offset = offset
+
+    def read(self, size):
+        ea = ida_loader.get_fileregion_ea(self.offset)
+        if ea == idc.BADADDR:
+            # best guess, such as if file is mapped at address 0x0.
+            ea = self.offset
+
+        logger.debug("reading 0x%x bytes at 0x%x (ea: 0x%x)", size, self.offset, ea)
+        return ida_bytes.get_bytes(ea, size)
+
+    def close(self):
+        return

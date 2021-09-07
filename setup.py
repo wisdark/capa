@@ -11,7 +11,7 @@ import os
 import setuptools
 
 requirements = [
-    "tqdm==4.61.2",
+    "tqdm==4.62.2",
     "pyyaml==5.4.1",
     "tabulate==0.8.9",
     "colorama==0.4.4",
@@ -21,10 +21,10 @@ requirements = [
     "viv-utils[flirt]==0.6.5",
     "halo==0.0.31",
     "networkx==2.5.1",
-    "ruamel.yaml==0.17.10",
+    "ruamel.yaml==0.17.16",
     "vivisect==1.0.3",
-    "smda==1.5.19",
-    "pefile==2021.5.24",
+    "smda==1.6.2",
+    "pefile==2021.9.3",
     "typing==3.7.4.3",
 ]
 
@@ -66,20 +66,22 @@ setuptools.setup(
     install_requires=requirements,
     extras_require={
         "dev": [
-            "pytest==6.2.4",
+            "pytest==6.2.5",
             "pytest-sugar==0.9.4",
             "pytest-instafail==0.4.2",
             "pytest-cov==2.12.1",
             "pycodestyle==2.7.0",
-            "black==21.7b0",
-            "isort==5.9.2",
+            "black==21.8b0",
+            "isort==5.9.3",
             "mypy==0.910",
+            "psutil==5.8.0",
             # type stubs for mypy
             "types-backports==0.1.3",
-            "types-colorama==0.4.2",
-            "types-PyYAML==5.4.3",
-            "types-tabulate==0.1.1",
-            "types-termcolor==0.1.1",
+            "types-colorama==0.4.3",
+            "types-PyYAML==5.4.10",
+            "types-tabulate==0.8.2",
+            "types-termcolor==1.1.1",
+            "types-psutil==5.8.2",
         ],
     },
     zip_safe=False,

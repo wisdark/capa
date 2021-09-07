@@ -104,28 +104,16 @@ def render_attack(doc, ostream):
     for rule in rutils.capability_rules(doc):
         if not rule["meta"].get("att&ck"):
             continue
-
         for attack in rule["meta"]["att&ck"]:
-            tactic, _, rest = attack.partition("::")
-            if "::" in rest:
-                technique, _, rest = rest.partition("::")
-                subtechnique, _, id = rest.rpartition(" ")
-                tactics[tactic].add((technique, subtechnique, id))
-            else:
-                technique, _, id = rest.rpartition(" ")
-                tactics[tactic].add((technique, id))
+            tactics[attack["tactic"]].add((attack["technique"], attack.get("subtechnique"), attack["id"]))
 
     for tactic, techniques in sorted(tactics.items()):
         inner_rows = []
-        for spec in sorted(techniques):
-            if len(spec) == 2:
-                technique, id = spec
+        for (technique, subtechnique, id) in sorted(techniques):
+            if subtechnique is None:
                 inner_rows.append("%s %s" % (technique, id))
-            elif len(spec) == 3:
-                technique, subtechnique, id = spec
-                inner_rows.append("%s::%s %s" % (technique, subtechnique, id))
             else:
-                raise RuntimeError("unexpected ATT&CK spec format")
+                inner_rows.append("%s::%s %s" % (technique, subtechnique, id))
         ostream["ATTCK"].setdefault(tactic.upper(), inner_rows)
 
 
@@ -150,31 +138,16 @@ def render_mbc(doc, ostream):
         if not rule["meta"].get("mbc"):
             continue
 
-        mbcs = rule["meta"]["mbc"]
-        if not isinstance(mbcs, list):
-            raise ValueError("invalid rule: MBC mapping is not a list")
-
-        for mbc in mbcs:
-            objective, _, rest = mbc.partition("::")
-            if "::" in rest:
-                behavior, _, rest = rest.partition("::")
-                method, _, id = rest.rpartition(" ")
-                objectives[objective].add((behavior, method, id))
-            else:
-                behavior, _, id = rest.rpartition(" ")
-                objectives[objective].add((behavior, id))
+        for mbc in rule["meta"]["mbc"]:
+            objectives[mbc["objective"]].add((mbc["behavior"], mbc.get("method"), mbc["id"]))
 
     for objective, behaviors in sorted(objectives.items()):
         inner_rows = []
-        for spec in sorted(behaviors):
-            if len(spec) == 2:
-                behavior, id = spec
-                inner_rows.append("%s %s" % (behavior, id))
-            elif len(spec) == 3:
-                behavior, method, id = spec
-                inner_rows.append("%s::%s %s" % (behavior, method, id))
+        for (behavior, method, id) in sorted(behaviors):
+            if method is None:
+                inner_rows.append("%s [%s]" % (behavior, id))
             else:
-                raise RuntimeError("unexpected MBC spec format")
+                inner_rows.append("%s::%s [%s]" % (behavior, method, id))
         ostream["MBC"].setdefault(objective.upper(), inner_rows)
 
 
@@ -196,7 +169,7 @@ def capa_details(file_path, output_format="dictionary"):
     capabilities, counts = capa.main.find_capabilities(rules, extractor, disable_progress=True)
 
     # collect metadata (used only to make rendering more complete)
-    meta = capa.main.collect_metadata("", file_path, RULES_PATH, "auto", extractor)
+    meta = capa.main.collect_metadata("", file_path, RULES_PATH, extractor)
     meta["analysis"].update(counts)
 
     capa_output = False

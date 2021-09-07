@@ -97,7 +97,7 @@ def render_feature(ostream, match, feature, indent=0):
     key = feature["type"]
     value = feature[feature["type"]]
 
-    if key != "regex":
+    if key not in ("regex", "substring"):
         # like:
         #   number: 10 = SOME_CONSTANT @ 0x401000
         if key == "string":
@@ -113,7 +113,8 @@ def render_feature(ostream, match, feature, indent=0):
                 ostream.write(capa.rules.DESCRIPTION_SEPARATOR)
                 ostream.write(feature["description"])
 
-        render_locations(ostream, match)
+        if key not in ("os", "arch"):
+            render_locations(ostream, match)
         ostream.write("\n")
     else:
         # like:

@@ -284,6 +284,57 @@ def test_match_matched_rules():
     assert capa.features.common.MatchedRule("test rule2") in features
 
 
+def test_substring():
+    rules = [
+        capa.rules.Rule.from_yaml(
+            textwrap.dedent(
+                """
+                rule:
+                    meta:
+                        name: test rule
+                    features:
+                        - and:
+                            - substring: abc
+                """
+            )
+        ),
+    ]
+    features, matches = capa.engine.match(
+        capa.rules.topologically_order_rules(rules),
+        {capa.features.common.String("aaaa"): {1}},
+        0x0,
+    )
+    assert capa.features.common.MatchedRule("test rule") not in features
+
+    features, matches = capa.engine.match(
+        capa.rules.topologically_order_rules(rules),
+        {capa.features.common.String("abc"): {1}},
+        0x0,
+    )
+    assert capa.features.common.MatchedRule("test rule") in features
+
+    features, matches = capa.engine.match(
+        capa.rules.topologically_order_rules(rules),
+        {capa.features.common.String("111abc222"): {1}},
+        0x0,
+    )
+    assert capa.features.common.MatchedRule("test rule") in features
+
+    features, matches = capa.engine.match(
+        capa.rules.topologically_order_rules(rules),
+        {capa.features.common.String("111abc"): {1}},
+        0x0,
+    )
+    assert capa.features.common.MatchedRule("test rule") in features
+
+    features, matches = capa.engine.match(
+        capa.rules.topologically_order_rules(rules),
+        {capa.features.common.String("abc222"): {1}},
+        0x0,
+    )
+    assert capa.features.common.MatchedRule("test rule") in features
+
+
 def test_regex():
     rules = [
         capa.rules.Rule.from_yaml(
@@ -474,11 +525,11 @@ def test_match_namespace():
 
 def test_render_number():
     assert str(capa.features.insn.Number(1)) == "number(0x1)"
-    assert str(capa.features.insn.Number(1, arch=capa.features.common.ARCH_X32)) == "number/x32(0x1)"
-    assert str(capa.features.insn.Number(1, arch=capa.features.common.ARCH_X64)) == "number/x64(0x1)"
+    assert str(capa.features.insn.Number(1, bitness=capa.features.common.BITNESS_X32)) == "number/x32(0x1)"
+    assert str(capa.features.insn.Number(1, bitness=capa.features.common.BITNESS_X64)) == "number/x64(0x1)"
 
 
 def test_render_offset():
     assert str(capa.features.insn.Offset(1)) == "offset(0x1)"
-    assert str(capa.features.insn.Offset(1, arch=capa.features.common.ARCH_X32)) == "offset/x32(0x1)"
-    assert str(capa.features.insn.Offset(1, arch=capa.features.common.ARCH_X64)) == "offset/x64(0x1)"
+    assert str(capa.features.insn.Offset(1, bitness=capa.features.common.BITNESS_X32)) == "offset/x32(0x1)"
+    assert str(capa.features.insn.Offset(1, bitness=capa.features.common.BITNESS_X64)) == "offset/x64(0x1)"

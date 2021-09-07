@@ -4,13 +4,18 @@
 
 ### New Features
 
-- explorer: allow user to add specified number of bytes when adding a Bytes feature in the Rule Generator #689 @mike-hunhoff
-- explorer: enforce max column width Features and Editor panes #691 @mike-hunhoff
-- explorer: add option to limit features to currently selected disassembly address #692 @mike-hunhoff
+- all: add support for ELF files #700 @Adir-Shemesh @TcM1911
+- rule format: add feature `format: ` for file format, like `format: pe` #723 @williballenthin
+- rule format: add feature `arch: ` for architecture, like `arch: amd64` #723 @williballenthin
+- rule format: add feature `os: ` for operating system, like `os: windows` #723 @williballenthin
+- rule format: add feature `substring: ` for verbatim strings with leading/trailing wildcards #737 @williballenthin
+- scripts: add `profile-memory.py` for profiling memory usage #736 @williballenthin
 
 ### Breaking Changes
 
-### New Rules (6)
+- legacy term `arch` (i.e., "x32") is now called `bitness` @williballenthin
+
+### New Rules (78)
 
 - collection/webcam/capture-webcam-image johnk3r
 - nursery/list-drag-and-drop-files michael.hunhoff@fireeye.com
@@ -18,15 +23,79 @@
 - nursery/monitor-local-ipv4-address-changes michael.hunhoff@fireeye.com
 - nursery/load-windows-common-language-runtime michael.hunhoff@fireeye.com
 - nursery/resize-volume-shadow-copy-storage michael.hunhoff@fireeye.com
+- nursery/add-user-account-group michael.hunhoff@fireeye.com
+- nursery/add-user-account-to-group michael.hunhoff@fireeye.com
+- nursery/add-user-account michael.hunhoff@fireeye.com
+- nursery/change-user-account-password michael.hunhoff@fireeye.com
+- nursery/delete-user-account-from-group michael.hunhoff@fireeye.com
+- nursery/delete-user-account-group michael.hunhoff@fireeye.com
+- nursery/delete-user-account michael.hunhoff@fireeye.com
+- nursery/list-domain-servers michael.hunhoff@fireeye.com
+- nursery/list-groups-for-user-account michael.hunhoff@fireeye.com
+- nursery/list-user-account-groups michael.hunhoff@fireeye.com
+- nursery/list-user-accounts-for-group michael.hunhoff@fireeye.com
+- nursery/list-user-accounts michael.hunhoff@fireeye.com
+- nursery/parse-url michael.hunhoff@fireeye.com
+- nursery/register-raw-input-devices michael.hunhoff@fireeye.com
+- anti-analysis/packer/gopacker/packed-with-gopacker jared.wilson@fireeye.com
+- host-interaction/driver/create-device-object @mr-tz
+- host-interaction/process/create/execute-command @mr-tz
+- data-manipulation/encryption/create-new-key-via-cryptacquirecontext chuong.dong@fireeye.com
+- host-interaction/log/clfs/append-data-to-clfs-log-container blaine.stancill@mandiant.com
+- host-interaction/log/clfs/read-data-from-clfs-log-container blaine.stancill@mandiant.com
+- data-manipulation/encryption/hc-128/encrypt-data-using-hc-128-via-wolfssl blaine.stancill@mandiant.com
+- c2/shell/create-unix-reverse-shell joakim@intezer.com
+- c2/shell/execute-shell-command-received-from-socket joakim@intezer.com
+- collection/get-current-user joakim@intezer.com
+- host-interaction/file-system/change-file-permission joakim@intezer.com
+- host-interaction/hardware/memory/get-memory-information joakim@intezer.com
+- host-interaction/mutex/lock-file joakim@intezer.com
+- host-interaction/os/version/get-kernel-version joakim@intezer.com
+- host-interaction/os/version/get-linux-distribution joakim@intezer.com
+- host-interaction/process/terminate/terminate-process-via-kill joakim@intezer.com
+- lib/duplicate-stdin-and-stdout joakim@intezer.com
+- nursery/capture-network-configuration-via-ifconfig joakim@intezeer.com
+- nursery/collect-ssh-keys joakim@intezer.com
+- nursery/enumerate-processes-via-procfs joakim@intezer.com
+- nursery/interact-with-iptables joakim@intezer.com
+- persistence/persist-via-desktop-autostart joakim@intezer.com
+- persistence/persist-via-shell-profile-or-rc-file joakim@intezer.com
+- persistence/service/persist-via-rc-script joakim@intezer.com
+- collection/get-current-user-on-linux joakim@intezer.com
+- collection/network/get-mac-address-on-windows moritz.raabe@fireeye.com
+- host-interaction/file-system/read/read-file-on-linux moritz.raabe@fireeye.com joakim@intezer.com
+- host-interaction/file-system/read/read-file-on-windows moritz.raabe@fireeye.com
+- host-interaction/file-system/write/write-file-on-windows william.ballenthin@fireeye.com
+- host-interaction/os/info/get-system-information-on-windows moritz.raabe@fireeye.com joakim@intezer.com
+- host-interaction/process/create/create-process-on-windows moritz.raabe@fireeye.com
+- linking/runtime-linking/link-function-at-runtime-on-windows moritz.raabe@fireeye.com
+- nursery/create-process-on-linux joakim@intezer.com
+- nursery/enumerate-files-on-linux william.ballenthin@fireeye.com
+- nursery/get-mac-address-on-linux joakim@intezer.com
+- nursery/get-system-information-on-linux joakim@intezer.com
+- nursery/link-function-at-runtime-on-linux joakim@intezer.com
+- nursery/write-file-on-linux joakim@intezer.com
+- communication/socket/tcp/send/obtain-transmitpackets-callback-function-via-wsaioctl jonathan.lepore@mandiant.com
 -
 
 ### Bug Fixes
+
+- main: fix `KeyError: 0` when reporting results @williballehtin #703
+- main: fix potential false negatives due to namespaces across scopes @williballenthin #721
+- linter: suppress some warnings about imports from ntdll/ntoskrnl @williballenthin #743
+- linter: suppress some warnings about missing examples in the nursery @williballenthin #747
 
 ### capa explorer IDA Pro plugin
 
 - explorer: add additional filter logic when displaying matches by function #686 @mike-hunhoff
 - explorer: remove duplicate check when saving file #687 @mike-hunhoff
 - explorer: update IDA extractor to use non-canon mnemonics #688 @mike-hunhoff
+- explorer: allow user to add specified number of bytes when adding a Bytes feature in the Rule Generator #689 @mike-hunhoff
+- explorer: enforce max column width Features and Editor panes #691 @mike-hunhoff
+- explorer: add option to limit features to currently selected disassembly address #692 @mike-hunhoff
+- explorer: update support documentation and runtime checks #741 @mike-hunhoff
+- explorer: small performance boost to rule generator search functionality #742 @mike-hunhoff
+- explorer: add support for arch, os, and format features #758 @mike-hunhoff
 
 ### Development
 
