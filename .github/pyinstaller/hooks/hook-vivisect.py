@@ -1,4 +1,4 @@
-# Copyright (C) 2020 FireEye, Inc. All Rights Reserved.
+# Copyright (C) 2020 Mandiant, Inc. All Rights Reserved.
 
 from PyInstaller.utils.hooks import copy_metadata
 
@@ -45,8 +45,8 @@ hiddenimports = [
     "vivisect.analysis.crypto",
     "vivisect.analysis.crypto.constants",
     "vivisect.analysis.elf",
-    "vivisect.analysis.elf",
     "vivisect.analysis.elf.elfplt",
+    "vivisect.analysis.elf.elfplt_late",
     "vivisect.analysis.elf.libc_start_main",
     "vivisect.analysis.generic",
     "vivisect.analysis.generic",

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Copyright (C) 2020 FireEye, Inc. All Rights Reserved.
+Copyright (C) 2020 Mandiant, Inc. All Rights Reserved.
 Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
 You may obtain a copy of the License at: [package root]/LICENSE.txt
@@ -10,8 +10,6 @@ See the License for the specific language governing permissions and limitations 
 """
 import os
 import sys
-import gzip
-import time
 import hashlib
 import logging
 import os.path
@@ -19,13 +17,14 @@ import argparse
 import datetime
 import textwrap
 import itertools
-import contextlib
 import collections
 from typing import Any, Dict, List, Tuple
 
 import halo
 import tqdm
 import colorama
+from pefile import PEFormatError
+from elftools.common.exceptions import ELFError
 
 import capa.rules
 import capa.engine
@@ -39,6 +38,7 @@ import capa.render.vverbose
 import capa.features.extractors
 import capa.features.extractors.common
 import capa.features.extractors.pefile
+import capa.features.extractors.elffile
 from capa.rules import Rule, RuleSet
 from capa.engine import FeatureSet, MatchResults
 from capa.helpers import get_file_taste
@@ -53,14 +53,6 @@ EXTENSIONS_SHELLCODE_64 = ("sc64", "raw64")
 
 
 logger = logging.getLogger("capa")
-
-
-@contextlib.contextmanager
-def timing(msg: str):
-    t0 = time.time()
-    yield
-    t1 = time.time()
-    logger.debug("perf: %s: %0.2fs", msg, t1 - t0)
 
 
 def set_vivisect_log_level(level):
@@ -79,7 +71,7 @@ def find_function_capabilities(ruleset: RuleSet, extractor: FeatureExtractor, f:
     function_features = collections.defaultdict(set)  # type: FeatureSet
     bb_matches = collections.defaultdict(list)  # type: MatchResults
 
-    for feature, va in extractor.extract_function_features(f):
+    for feature, va in itertools.chain(extractor.extract_function_features(f), extractor.extract_global_features()):
         function_features[feature].add(va)
 
     for bb in extractor.get_basic_blocks(f):
@@ -88,12 +80,16 @@ def find_function_capabilities(ruleset: RuleSet, extractor: FeatureExtractor, f:
         #  - basic blocks
         bb_features = collections.defaultdict(set)
 
-        for feature, va in extractor.extract_basic_block_features(f, bb):
+        for feature, va in itertools.chain(
+            extractor.extract_basic_block_features(f, bb), extractor.extract_global_features()
+        ):
             bb_features[feature].add(va)
             function_features[feature].add(va)
 
         for insn in extractor.get_instructions(f, bb):
-            for feature, va in extractor.extract_insn_features(f, bb, insn):
+            for feature, va in itertools.chain(
+                extractor.extract_insn_features(f, bb, insn), extractor.extract_global_features()
+            ):
                 bb_features[feature].add(va)
                 function_features[feature].add(va)
 
@@ -112,7 +108,7 @@ def find_function_capabilities(ruleset: RuleSet, extractor: FeatureExtractor, f:
 def find_file_capabilities(ruleset: RuleSet, extractor: FeatureExtractor, function_features: FeatureSet):
     file_features = collections.defaultdict(set)  # type: FeatureSet
 
-    for feature, va in extractor.extract_file_features():
+    for feature, va in itertools.chain(extractor.extract_file_features(), extractor.extract_global_features()):
         # not all file features may have virtual addresses.
         # if not, then at least ensure the feature shows up in the index.
         # the set of addresses will still be empty.
@@ -294,40 +290,6 @@ def get_os(sample: str) -> str:
     return "unknown"
 
 
-SHELLCODE_BASE = 0x690000
-
-
-def get_shellcode_vw(sample, arch="auto"):
-    """
-    Return shellcode workspace using explicit arch or via auto detect.
-    The workspace is *not* analyzed nor saved. Its up to the caller to do this.
-    Then, they can register FLIRT analyzers or decide not to write to disk.
-    """
-    import viv_utils
-
-    with open(sample, "rb") as f:
-        sample_bytes = f.read()
-
-    if arch == "auto":
-        # choose arch with most functions, idea by Jay G.
-        vw_cands = []
-        for arch in ["i386", "amd64"]:
-            vw_cands.append(
-                viv_utils.getShellcodeWorkspace(
-                    sample_bytes, arch, base=SHELLCODE_BASE, analyze=False, should_save=False
-                )
-            )
-        if not vw_cands:
-            raise ValueError("could not generate vivisect workspace")
-        vw = max(vw_cands, key=lambda vw: len(vw.getFunctions()))
-    else:
-        vw = viv_utils.getShellcodeWorkspace(sample_bytes, arch, base=SHELLCODE_BASE, analyze=False, should_save=False)
-
-    vw.setMeta("StorageName", "%s.viv" % sample)
-
-    return vw
-
-
 def get_meta_str(vw):
     """
     Return workspace meta information string
@@ -337,58 +299,6 @@ def get_meta_str(vw):
         if k in vw.metadata:
             meta.append("%s: %s" % (k.lower(), vw.metadata[k]))
     return "%s, number of functions: %d" % (", ".join(meta), len(vw.getFunctions()))
-
-
-def load_flirt_signature(path):
-    # lazy import enables us to only require flirt here and not in IDA, for example
-    import flirt
-
-    if path.endswith(".sig"):
-        with open(path, "rb") as f:
-            with timing("flirt: parsing .sig: " + path):
-                sigs = flirt.parse_sig(f.read())
-
-    elif path.endswith(".pat"):
-        with open(path, "rb") as f:
-            with timing("flirt: parsing .pat: " + path):
-                sigs = flirt.parse_pat(f.read().decode("utf-8").replace("\r\n", "\n"))
-
-    elif path.endswith(".pat.gz"):
-        with gzip.open(path, "rb") as f:
-            with timing("flirt: parsing .pat.gz: " + path):
-                sigs = flirt.parse_pat(f.read().decode("utf-8").replace("\r\n", "\n"))
-
-    else:
-        raise ValueError("unexpect signature file extension: " + path)
-
-    return sigs
-
-
-def register_flirt_signature_analyzers(vw, sigpaths):
-    """
-    args:
-      vw (vivisect.VivWorkspace):
-      sigpaths (List[str]): file system paths of .sig/.pat files
-    """
-    # lazy import enables us to only require flirt here and not in IDA, for example
-    import flirt
-    import viv_utils.flirt
-
-    for sigpath in sigpaths:
-        try:
-            sigs = load_flirt_signature(sigpath)
-        except ValueError as e:
-            logger.warning("could not load %s: %s", sigpath, str(e))
-            continue
-
-        logger.debug("flirt: sig count: %d", len(sigs))
-
-        with timing("flirt: compiling sigs"):
-            matcher = flirt.compile(sigs)
-
-        analyzer = viv_utils.flirt.FlirtFunctionAnalyzer(matcher, sigpath)
-        logger.debug("registering viv function analyzer: %s", repr(analyzer))
-        viv_utils.flirt.addFlirtFunctionAnalyzer(vw, analyzer)
 
 
 def is_running_standalone() -> bool:
@@ -451,8 +361,9 @@ def get_workspace(path, format, sigpaths):
 
     supported formats:
       - pe
-      - sc32
-      - sc64
+      - elf
+      - shellcode 32-bit
+      - shellcode 64-bit
       - auto
 
     this creates and analyzes the workspace; however, it does *not* save the workspace.
@@ -473,13 +384,13 @@ def get_workspace(path, format, sigpaths):
         vw = viv_utils.getWorkspace(path, analyze=False, should_save=False)
     elif format == "sc32":
         # these are not analyzed nor saved.
-        vw = get_shellcode_vw(path, arch="i386")
+        vw = viv_utils.getShellcodeWorkspaceFromFile(path, arch="i386", analyze=False)
     elif format == "sc64":
-        vw = get_shellcode_vw(path, arch="amd64")
+        vw = viv_utils.getShellcodeWorkspaceFromFile(path, arch="amd64", analyze=False)
     else:
         raise ValueError("unexpected format: " + format)
 
-    register_flirt_signature_analyzers(vw, sigpaths)
+    viv_utils.flirt.register_flirt_signature_analyzers(vw, sigpaths)
 
     vw.analyze()
 
@@ -833,7 +744,7 @@ def handle_common_args(args):
             logger.debug(" Using default embedded rules.")
             logger.debug(" To provide your own rules, use the form `capa.exe -r ./path/to/rules/  /path/to/mal.exe`.")
             logger.debug(" You can see the current default rule set here:")
-            logger.debug("     https://github.com/fireeye/capa-rules")
+            logger.debug("     https://github.com/mandiant/capa-rules")
             logger.debug("-" * 80)
 
             rules_path = os.path.join(get_default_root(), "rules")
@@ -881,7 +792,7 @@ def main(argv=None):
         """
         By default, capa uses a default set of embedded rules.
         You can see the rule set here:
-          https://github.com/fireeye/capa-rules
+          https://github.com/mandiant/capa-rules
 
         To provide your own rule set, use the `-r` flag:
           capa  --rules /path/to/rules  suspicious.exe
@@ -941,19 +852,34 @@ def main(argv=None):
         logger.error("%s", str(e))
         return -1
 
+    file_extractor = None
     if args.format == "pe" or (args.format == "auto" and taste.startswith(b"MZ")):
-        # this pefile file feature extractor is pretty light weight: it doesn't do any code analysis.
-        # so we can fairly quickly determine if the given PE file has "pure" file-scope rules
+        # these pefile and elffile file feature extractors are pretty light weight: they don't do any code analysis.
+        # so we can fairly quickly determine if the given file has "pure" file-scope rules
         # that indicate a limitation (like "file is packed based on section names")
         # and avoid doing a full code analysis on difficult/impossible binaries.
         try:
-            from pefile import PEFormatError
-
             file_extractor = capa.features.extractors.pefile.PefileFeatureExtractor(args.sample)
         except PEFormatError as e:
             logger.error("Input file '%s' is not a valid PE file: %s", args.sample, str(e))
             return -1
-        pure_file_capabilities, _ = find_file_capabilities(rules, file_extractor, {})
+
+    elif args.format == "elf" or (args.format == "auto" and taste.startswith(b"\x7fELF")):
+        try:
+            file_extractor = capa.features.extractors.elffile.ElfFeatureExtractor(args.sample)
+        except (ELFError, OverflowError) as e:
+            logger.error("Input file '%s' is not a valid ELF file: %s", args.sample, str(e))
+            return -1
+
+    if file_extractor:
+        try:
+            pure_file_capabilities, _ = find_file_capabilities(rules, file_extractor, {})
+        except PEFormatError as e:
+            logger.error("Input file '%s' is not a valid PE file: %s", args.sample, str(e))
+            return -1
+        except (ELFError, OverflowError) as e:
+            logger.error("Input file '%s' is not a valid ELF file: %s", args.sample, str(e))
+            return -1
 
         # file limitations that rely on non-file scope won't be detected here.
         # nor on FunctionName features, because pefile doesn't support this.
@@ -965,7 +891,11 @@ def main(argv=None):
                 return -1
 
     try:
-        sig_paths = get_signatures(args.signatures)
+        if args.format == "pe" or (args.format == "auto" and taste.startswith(b"MZ")):
+            sig_paths = get_signatures(args.signatures)
+        else:
+            sig_paths = []
+            logger.debug("skipping library code matching: only have PE signatures")
     except (IOError) as e:
         logger.error("%s", str(e))
         return -1
@@ -1059,7 +989,7 @@ def ida_main():
     logger.debug(" Using default embedded rules.")
     logger.debug(" ")
     logger.debug(" You can see the current default rule set here:")
-    logger.debug("     https://github.com/fireeye/capa-rules")
+    logger.debug("     https://github.com/mandiant/capa-rules")
     logger.debug("-" * 80)
 
     rules_path = os.path.join(get_default_root(), "rules")

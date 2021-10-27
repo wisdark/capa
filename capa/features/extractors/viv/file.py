@@ -1,4 +1,4 @@
-# Copyright (C) 2020 FireEye, Inc. All Rights Reserved.
+# Copyright (C) 2020 Mandiant, Inc. All Rights Reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at: [package root]/LICENSE.txt
@@ -68,14 +68,7 @@ def extract_file_section_names(vw, **kwargs):
 
 
 def extract_file_strings(buf, **kwargs):
-    """
-    extract ASCII and UTF-16 LE strings from file
-    """
-    for s in capa.features.extractors.strings.extract_ascii_strings(buf):
-        yield String(s.s), s.offset
-
-    for s in capa.features.extractors.strings.extract_unicode_strings(buf):
-        yield String(s.s), s.offset
+    yield from capa.features.extractors.common.extract_file_strings(buf)
 
 
 def extract_file_function_names(vw, **kwargs):

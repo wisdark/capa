@@ -1,4 +1,4 @@
-# Copyright (C) 2020 FireEye, Inc. All Rights Reserved.
+# Copyright (C) 2020 Mandiant, Inc. All Rights Reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at: [package root]/LICENSE.txt
@@ -11,21 +11,22 @@ import os
 import setuptools
 
 requirements = [
-    "tqdm==4.62.2",
-    "pyyaml==5.4.1",
+    "tqdm==4.62.3",
+    "pyyaml==6.0",
     "tabulate==0.8.9",
     "colorama==0.4.4",
     "termcolor==1.1.0",
     "wcwidth==0.2.5",
     "ida-settings==2.1.0",
-    "viv-utils[flirt]==0.6.5",
+    "viv-utils[flirt]==0.6.7",
     "halo==0.0.31",
     "networkx==2.5.1",
     "ruamel.yaml==0.17.16",
-    "vivisect==1.0.3",
+    "vivisect==1.0.5",
     "smda==1.6.2",
     "pefile==2021.9.3",
     "typing==3.7.4.3",
+    "pyelftools==0.27",
 ]
 
 # this sets __version__
@@ -49,11 +50,11 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     author="Willi Ballenthin, Moritz Raabe",
     author_email="william.ballenthin@mandiant.com, moritz.raabe@mandiant.com",
-    url="https://www.github.com/fireeye/capa",
+    url="https://www.github.com/mandiant/capa",
     project_urls={
-        "Documentation": "https://github.com/fireeye/capa/tree/master/doc",
-        "Rules": "https://github.com/fireeye/capa-rules",
-        "Rules Documentation": "https://github.com/fireeye/capa-rules/tree/master/doc",
+        "Documentation": "https://github.com/mandiant/capa/tree/master/doc",
+        "Rules": "https://github.com/mandiant/capa-rules",
+        "Rules Documentation": "https://github.com/mandiant/capa-rules/tree/master/doc",
     },
     packages=setuptools.find_packages(exclude=["tests"]),
     package_dir={"capa": "capa"},
@@ -69,19 +70,19 @@ setuptools.setup(
             "pytest==6.2.5",
             "pytest-sugar==0.9.4",
             "pytest-instafail==0.4.2",
-            "pytest-cov==2.12.1",
-            "pycodestyle==2.7.0",
-            "black==21.8b0",
+            "pytest-cov==3.0.0",
+            "pycodestyle==2.8.0",
+            "black==21.9b0",
             "isort==5.9.3",
             "mypy==0.910",
             "psutil==5.8.0",
             # type stubs for mypy
             "types-backports==0.1.3",
-            "types-colorama==0.4.3",
-            "types-PyYAML==5.4.10",
-            "types-tabulate==0.8.2",
-            "types-termcolor==1.1.1",
-            "types-psutil==5.8.2",
+            "types-colorama==0.4.4",
+            "types-PyYAML==6.0.0",
+            "types-tabulate==0.8.3",
+            "types-termcolor==1.1.2",
+            "types-psutil==5.8.13",
         ],
     },
     zip_safe=False,

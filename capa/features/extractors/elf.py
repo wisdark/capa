@@ -1,3 +1,10 @@
+# Copyright (C) 2020 Mandiant, Inc. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at: [package root]/LICENSE.txt
+# Unless required by applicable law or agreed to in writing, software distributed under the License
+#  is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and limitations under the License.
 import struct
 import logging
 from enum import Enum
@@ -76,7 +83,7 @@ def detect_elf_os(f: BinaryIO) -> str:
         (e_phoff,) = struct.unpack_from(endian + "Q", file_header, 0x20)
         e_phentsize, e_phnum = struct.unpack_from(endian + "HH", file_header, 0x36)
     else:
-        raise NotImplemented
+        raise NotImplementedError()
 
     logger.debug("e_phoff: 0x%02x e_phentsize: 0x%02x e_phnum: %d", e_phoff, e_phentsize, e_phnum)
 
@@ -141,7 +148,7 @@ def detect_elf_os(f: BinaryIO) -> str:
         elif bitness == 64:
             p_offset, _, _, p_filesz = struct.unpack_from(endian + "QQQQ", phent, 0x8)
         else:
-            raise NotImplemented
+            raise NotImplementedError()
 
         logger.debug("p_offset: 0x%02x p_filesz: 0x%04x", p_offset, p_filesz)
 
@@ -214,7 +221,7 @@ def detect_elf_os(f: BinaryIO) -> str:
         elif bitness == 64:
             p_offset, _, _, p_filesz = struct.unpack_from(endian + "QQQQ", phent, 0x8)
         else:
-            raise NotImplemented
+            raise NotImplementedError()
 
         f.seek(p_offset)
         interp = f.read(p_filesz)

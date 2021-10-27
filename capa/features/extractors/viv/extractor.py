@@ -1,4 +1,4 @@
-# Copyright (C) 2020 FireEye, Inc. All Rights Reserved.
+# Copyright (C) 2020 Mandiant, Inc. All Rights Reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at: [package root]/LICENSE.txt
@@ -51,36 +51,31 @@ class VivisectFeatureExtractor(FeatureExtractor):
         # assume there is only one file loaded into the vw
         return list(self.vw.filemeta.values())[0]["imagebase"]
 
-    def extract_file_features(self):
-        for feature, va in capa.features.extractors.viv.file.extract_features(self.vw, self.buf):
-            yield feature, va
+    def extract_global_features(self):
         yield from self.global_features
+
+    def extract_file_features(self):
+        yield from capa.features.extractors.viv.file.extract_features(self.vw, self.buf)
 
     def get_functions(self):
         for va in sorted(self.vw.getFunctions()):
             yield viv_utils.Function(self.vw, va)
 
     def extract_function_features(self, f):
-        for feature, va in capa.features.extractors.viv.function.extract_features(f):
-            yield feature, va
-        yield from self.global_features
+        yield from capa.features.extractors.viv.function.extract_features(f)
 
     def get_basic_blocks(self, f):
         return f.basic_blocks
 
     def extract_basic_block_features(self, f, bb):
-        for feature, va in capa.features.extractors.viv.basicblock.extract_features(f, bb):
-            yield feature, va
-        yield from self.global_features
+        yield from capa.features.extractors.viv.basicblock.extract_features(f, bb)
 
     def get_instructions(self, f, bb):
         for insn in bb.instructions:
             yield InstructionHandle(insn)
 
     def extract_insn_features(self, f, bb, insn):
-        for feature, va in capa.features.extractors.viv.insn.extract_features(f, bb, insn):
-            yield feature, va
-        yield from self.global_features
+        yield from capa.features.extractors.viv.insn.extract_features(f, bb, insn)
 
     def is_library_function(self, va):
         return viv_utils.flirt.is_library_function(self.vw, va)

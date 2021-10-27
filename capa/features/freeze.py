@@ -19,6 +19,10 @@ json format:
         ...
       },
       'scopes': {
+        'global': [
+          (str(name), [any(arg), ...], int(va), ()),
+          ...
+        },
         'file': [
           (str(name), [any(arg), ...], int(va), ()),
           ...
@@ -41,7 +45,7 @@ json format:
       }
     }
 
-Copyright (C) 2020 FireEye, Inc. All Rights Reserved.
+Copyright (C) 2020 Mandiant, Inc. All Rights Reserved.
 Licensed under the Apache License, Version 2.0 (the "License");
  you may not use this file except in compliance with the License.
 You may obtain a copy of the License at: [package root]/LICENSE.txt
@@ -52,7 +56,6 @@ See the License for the specific language governing permissions and limitations 
 import json
 import zlib
 import logging
-import os.path
 
 import capa.features.file
 import capa.features.insn
@@ -91,12 +94,15 @@ def dumps(extractor):
         "base address": extractor.get_base_address(),
         "functions": {},
         "scopes": {
+            "global": [],
             "file": [],
             "function": [],
             "basic block": [],
             "instruction": [],
         },
     }
+    for feature, va in extractor.extract_global_features():
+        ret["scopes"]["global"].append(serialize_feature(feature) + (hex(va), ()))
 
     for feature, va in extractor.extract_file_features():
         ret["scopes"]["file"].append(serialize_feature(feature) + (hex(va), ()))
@@ -151,6 +157,7 @@ def loads(s):
 
     features = {
         "base address": doc.get("base address"),
+        "global features": [],
         "file features": [],
         "functions": {},
     }
@@ -180,6 +187,12 @@ def loads(s):
     #     ('MatchedRule', ('foo', ), '0x401000', ('0x401000', ))
     #      ^^^^^^^^^^^^^  ^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^^
     #      feature name   args       addr         func/bb/insn
+    for feature in doc.get("scopes", {}).get("global", []):
+        va, loc = feature[2:]
+        va = int(va, 0x10)
+        feature = deserialize_feature(feature[:2])
+        features["global features"].append((va, feature))
+
     for feature in doc.get("scopes", {}).get("file", []):
         va, loc = feature[2:]
         va = int(va, 0x10)

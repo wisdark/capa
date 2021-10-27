@@ -1,4 +1,4 @@
-# Copyright (C) 2020 FireEye, Inc. All Rights Reserved.
+# Copyright (C) 2020 Mandiant, Inc. All Rights Reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at: [package root]/LICENSE.txt
@@ -9,7 +9,7 @@
 import abc
 from typing import Tuple, Iterator, SupportsInt
 
-from capa.features.basicblock import Feature
+from capa.features.common import Feature
 
 # feature extractors may reference functions, BBs, insns by opaque handle values.
 # the only requirement of these handles are that they support `__int__`,
@@ -57,7 +57,23 @@ class FeatureExtractor:
         """
         fetch the preferred load address at which the sample was analyzed.
         """
-        raise NotImplemented
+        raise NotImplementedError()
+
+    @abc.abstractmethod
+    def extract_global_features(self) -> Iterator[Tuple[Feature, int]]:
+        """
+        extract features found at every scope ("global").
+
+        example::
+
+            extractor = VivisectFeatureExtractor(vw, path)
+            for feature, va in extractor.get_global_features():
+                print('0x%x: %s', va, feature)
+
+        yields:
+          Tuple[Feature, int]: feature and its location
+        """
+        raise NotImplementedError()
 
     @abc.abstractmethod
     def extract_file_features(self) -> Iterator[Tuple[Feature, int]]:
@@ -73,7 +89,7 @@ class FeatureExtractor:
         yields:
           Tuple[Feature, int]: feature and its location
         """
-        raise NotImplemented
+        raise NotImplementedError()
 
     @abc.abstractmethod
     def get_functions(self) -> Iterator[FunctionHandle]:
@@ -81,7 +97,7 @@ class FeatureExtractor:
         enumerate the functions and provide opaque values that will
          subsequently be provided to `.extract_function_features()`, etc.
         """
-        raise NotImplemented
+        raise NotImplementedError()
 
     def is_library_function(self, va: int) -> bool:
         """
@@ -137,7 +153,7 @@ class FeatureExtractor:
         yields:
           Tuple[Feature, int]: feature and its location
         """
-        raise NotImplemented
+        raise NotImplementedError()
 
     @abc.abstractmethod
     def get_basic_blocks(self, f: FunctionHandle) -> Iterator[BBHandle]:
@@ -145,7 +161,7 @@ class FeatureExtractor:
         enumerate the basic blocks in the given function and provide opaque values that will
          subsequently be provided to `.extract_basic_block_features()`, etc.
         """
-        raise NotImplemented
+        raise NotImplementedError()
 
     @abc.abstractmethod
     def extract_basic_block_features(self, f: FunctionHandle, bb: BBHandle) -> Iterator[Tuple[Feature, int]]:
@@ -168,7 +184,7 @@ class FeatureExtractor:
         yields:
           Tuple[Feature, int]: feature and its location
         """
-        raise NotImplemented
+        raise NotImplementedError()
 
     @abc.abstractmethod
     def get_instructions(self, f: FunctionHandle, bb: BBHandle) -> Iterator[InsnHandle]:
@@ -176,7 +192,7 @@ class FeatureExtractor:
         enumerate the instructions in the given basic block and provide opaque values that will
          subsequently be provided to `.extract_insn_features()`, etc.
         """
-        raise NotImplemented
+        raise NotImplementedError()
 
     @abc.abstractmethod
     def extract_insn_features(self, f: FunctionHandle, bb: BBHandle, insn: InsnHandle) -> Iterator[Tuple[Feature, int]]:
@@ -201,7 +217,7 @@ class FeatureExtractor:
         yields:
           Tuple[Feature, int]: feature and its location
         """
-        raise NotImplemented
+        raise NotImplementedError()
 
 
 class NullFeatureExtractor(FeatureExtractor):
@@ -216,6 +232,10 @@ class NullFeatureExtractor(FeatureExtractor):
 
         extractor = NullFeatureExtractor({
             'base address: 0x401000,
+            'global features': [
+                (0x0, capa.features.Arch('i386')),
+                (0x0, capa.features.OS('linux')),
+            ],
             'file features': [
                 (0x402345, capa.features.Characteristic('embedded pe')),
             ],
@@ -252,6 +272,11 @@ class NullFeatureExtractor(FeatureExtractor):
 
     def get_base_address(self):
         return self.features["base address"]
+
+    def extract_global_features(self):
+        for p in self.features.get("global features", []):
+            va, feature = p
+            yield feature, va
 
     def extract_file_features(self):
         for p in self.features.get("file features", []):

@@ -1,4 +1,4 @@
-# Copyright (C) 2020 FireEye, Inc. All Rights Reserved.
+# Copyright (C) 2020 Mandiant, Inc. All Rights Reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at: [package root]/LICENSE.txt
@@ -627,7 +627,7 @@ class CapaExplorerForm(idaapi.PluginForm):
                 path = self.ask_user_directory()
                 if not path:
                     logger.warning(
-                        "You must select a file directory containing capa rules before analysis can be run. The standard collection of capa rules can be downloaded from https://github.com/fireeye/capa-rules."
+                        "You must select a file directory containing capa rules before analysis can be run. The standard collection of capa rules can be downloaded from https://github.com/mandiant/capa-rules."
                     )
                     return False
                 settings.user[CAPA_SETTINGS_RULE_PATH] = path
@@ -694,7 +694,7 @@ class CapaExplorerForm(idaapi.PluginForm):
             )
             logger.error("Failed to load rules from %s (error: %s).", settings.user[CAPA_SETTINGS_RULE_PATH], e)
             logger.error(
-                "Make sure your file directory contains properly formatted capa rules. You can download the standard collection of capa rules from https://github.com/fireeye/capa-rules."
+                "Make sure your file directory contains properly formatted capa rules. You can download the standard collection of capa rules from https://github.com/mandiant/capa-rules."
             )
             settings.user[CAPA_SETTINGS_RULE_PATH] = ""
             return False
@@ -1032,7 +1032,7 @@ class CapaExplorerForm(idaapi.PluginForm):
 
     def update_rule_status(self, rule_text):
         """ """
-        if self.view_rulegen_editor.root is None:
+        if not self.view_rulegen_editor.invisibleRootItem().childCount():
             self.set_rulegen_preview_border_neutral()
             self.view_rulegen_status_label.clear()
             return
