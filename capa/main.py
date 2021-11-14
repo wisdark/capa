@@ -10,6 +10,7 @@ See the License for the specific language governing permissions and limitations 
 """
 import os
 import sys
+import time
 import hashlib
 import logging
 import os.path
@@ -17,6 +18,7 @@ import argparse
 import datetime
 import textwrap
 import itertools
+import contextlib
 import collections
 from typing import Any, Dict, List, Tuple
 
@@ -26,6 +28,7 @@ import colorama
 from pefile import PEFormatError
 from elftools.common.exceptions import ELFError
 
+import capa.perf
 import capa.rules
 import capa.engine
 import capa.version
@@ -39,7 +42,7 @@ import capa.features.extractors
 import capa.features.extractors.common
 import capa.features.extractors.pefile
 import capa.features.extractors.elffile
-from capa.rules import Rule, RuleSet
+from capa.rules import Rule, Scope, RuleSet
 from capa.engine import FeatureSet, MatchResults
 from capa.helpers import get_file_taste
 from capa.features.extractors.base_extractor import FunctionHandle, FeatureExtractor
@@ -51,8 +54,26 @@ BACKEND_SMDA = "smda"
 EXTENSIONS_SHELLCODE_32 = ("sc32", "raw32")
 EXTENSIONS_SHELLCODE_64 = ("sc64", "raw64")
 
+E_MISSING_RULES = -10
+E_MISSING_FILE = -11
+E_INVALID_RULE = -12
+E_CORRUPT_FILE = -13
+E_FILE_LIMITATION = -14
+E_INVALID_SIG = -15
+E_INVALID_FILE_TYPE = -16
+E_INVALID_FILE_ARCH = -17
+E_INVALID_FILE_OS = -18
+E_UNSUPPORTED_IDA_VERSION = -19
 
 logger = logging.getLogger("capa")
+
+
+@contextlib.contextmanager
+def timing(msg: str):
+    t0 = time.time()
+    yield
+    t1 = time.time()
+    logger.debug("perf: %s: %0.2fs", msg, t1 - t0)
 
 
 def set_vivisect_log_level(level):
@@ -93,7 +114,7 @@ def find_function_capabilities(ruleset: RuleSet, extractor: FeatureExtractor, f:
                 bb_features[feature].add(va)
                 function_features[feature].add(va)
 
-        _, matches = capa.engine.match(ruleset.basic_block_rules, bb_features, int(bb))
+        _, matches = ruleset.match(Scope.BASIC_BLOCK, bb_features, int(bb))
 
         for rule_name, res in matches.items():
             bb_matches[rule_name].extend(res)
@@ -101,7 +122,7 @@ def find_function_capabilities(ruleset: RuleSet, extractor: FeatureExtractor, f:
             for va, _ in res:
                 capa.engine.index_rule_matches(function_features, rule, [va])
 
-    _, function_matches = capa.engine.match(ruleset.function_rules, function_features, int(f))
+    _, function_matches = ruleset.match(Scope.FUNCTION, function_features, int(f))
     return function_matches, bb_matches, len(function_features)
 
 
@@ -122,7 +143,7 @@ def find_file_capabilities(ruleset: RuleSet, extractor: FeatureExtractor, functi
 
     file_features.update(function_features)
 
-    _, matches = capa.engine.match(ruleset.file_rules, file_features, 0x0)
+    _, matches = ruleset.match(Scope.FILE, file_features, 0x0)
     return matches, len(file_features)
 
 
@@ -582,8 +603,53 @@ def collect_metadata(argv, sample_path, rules_path, extractor):
             "extractor": extractor.__class__.__name__,
             "rules": rules_path,
             "base_address": extractor.get_base_address(),
+            "layout": {
+                # this is updated after capabilities have been collected.
+                # will look like:
+                #
+                # "functions": { 0x401000: { "matched_basic_blocks": [ 0x401000, 0x401005, ... ] }, ... }
+            },
         },
     }
+
+
+def compute_layout(rules, extractor, capabilities):
+    """
+    compute a metadata structure that links basic blocks
+    to the functions in which they're found.
+
+    only collect the basic blocks at which some rule matched.
+    otherwise, we may pollute the json document with
+    a large amount of un-referenced data.
+    """
+    functions_by_bb = {}
+    bbs_by_function = {}
+    for f in extractor.get_functions():
+        bbs_by_function[int(f)] = []
+        for bb in extractor.get_basic_blocks(f):
+            functions_by_bb[int(bb)] = int(f)
+            bbs_by_function[int(f)].append(int(bb))
+
+    matched_bbs = set()
+    for rule_name, matches in capabilities.items():
+        rule = rules[rule_name]
+        if rule.meta.get("scope") == capa.rules.BASIC_BLOCK_SCOPE:
+            for (addr, match) in matches:
+                assert addr in functions_by_bb
+                matched_bbs.add(addr)
+
+    layout = {
+        "functions": {
+            f: {
+                "matched_basic_blocks": [bb for bb in bbs if bb in matched_bbs]
+                # this object is open to extension in the future,
+                # such as with the function name, etc.
+            }
+            for f, bbs in bbs_by_function.items()
+        }
+    }
+
+    return layout
 
 
 def install_common_args(parser, wanted=None):
@@ -756,7 +822,7 @@ def handle_common_args(args):
                 # so in this case, we require the user to use -r to specify the rule directory.
                 logger.error("default embedded rules not found! (maybe you installed capa as a library?)")
                 logger.error("provide your own rule set via the `-r` option.")
-                return -1
+                return E_MISSING_RULES
         else:
             rules_path = args.rules
             logger.debug("using rules path: %s", rules_path)
@@ -822,7 +888,9 @@ def main(argv=None):
     install_common_args(parser, {"sample", "format", "backend", "signatures", "rules", "tag"})
     parser.add_argument("-j", "--json", action="store_true", help="emit JSON instead of text")
     args = parser.parse_args(args=argv)
-    handle_common_args(args)
+    ret = handle_common_args(args)
+    if ret is not None and ret != 0:
+        return ret
 
     try:
         taste = get_file_taste(args.sample)
@@ -830,11 +898,12 @@ def main(argv=None):
         # per our research there's not a programmatic way to render the IOError with non-ASCII filename unless we
         # handle the IOError separately and reach into the args
         logger.error("%s", e.args[0])
-        return -1
+        return E_MISSING_FILE
 
     try:
         rules = get_rules(args.rules, disable_progress=args.quiet)
         rules = capa.rules.RuleSet(rules)
+
         logger.debug(
             "successfully loaded %s rules",
             # during the load of the RuleSet, we extract subscope statements into their own rules
@@ -850,7 +919,7 @@ def main(argv=None):
                 logger.debug(" %d. %s", i, r)
     except (IOError, capa.rules.InvalidRule, capa.rules.InvalidRuleSet) as e:
         logger.error("%s", str(e))
-        return -1
+        return E_INVALID_RULE
 
     file_extractor = None
     if args.format == "pe" or (args.format == "auto" and taste.startswith(b"MZ")):
@@ -862,24 +931,24 @@ def main(argv=None):
             file_extractor = capa.features.extractors.pefile.PefileFeatureExtractor(args.sample)
         except PEFormatError as e:
             logger.error("Input file '%s' is not a valid PE file: %s", args.sample, str(e))
-            return -1
+            return E_CORRUPT_FILE
 
     elif args.format == "elf" or (args.format == "auto" and taste.startswith(b"\x7fELF")):
         try:
             file_extractor = capa.features.extractors.elffile.ElfFeatureExtractor(args.sample)
         except (ELFError, OverflowError) as e:
             logger.error("Input file '%s' is not a valid ELF file: %s", args.sample, str(e))
-            return -1
+            return E_CORRUPT_FILE
 
     if file_extractor:
         try:
             pure_file_capabilities, _ = find_file_capabilities(rules, file_extractor, {})
         except PEFormatError as e:
             logger.error("Input file '%s' is not a valid PE file: %s", args.sample, str(e))
-            return -1
+            return E_CORRUPT_FILE
         except (ELFError, OverflowError) as e:
             logger.error("Input file '%s' is not a valid ELF file: %s", args.sample, str(e))
-            return -1
+            return E_CORRUPT_FILE
 
         # file limitations that rely on non-file scope won't be detected here.
         # nor on FunctionName features, because pefile doesn't support this.
@@ -888,7 +957,7 @@ def main(argv=None):
             # do show the output in verbose mode, though.
             if not (args.verbose or args.vverbose or args.json):
                 logger.debug("file limitation short circuit, won't analyze fully.")
-                return -1
+                return E_FILE_LIMITATION
 
     try:
         if args.format == "pe" or (args.format == "auto" and taste.startswith(b"MZ")):
@@ -898,7 +967,7 @@ def main(argv=None):
             logger.debug("skipping library code matching: only have PE signatures")
     except (IOError) as e:
         logger.error("%s", str(e))
-        return -1
+        return E_INVALID_SIG
 
     if (args.format == "freeze") or (args.format == "auto" and capa.features.freeze.is_freeze(taste)):
         format = "freeze"
@@ -926,14 +995,14 @@ def main(argv=None):
             )
             logger.error(" If you don't know the input file type, you can try using the `file` utility to guess it.")
             logger.error("-" * 80)
-            return -1
+            return E_INVALID_FILE_TYPE
         except UnsupportedArchError:
             logger.error("-" * 80)
             logger.error(" Input file does not appear to target a supported architecture.")
             logger.error(" ")
             logger.error(" capa currently only supports analyzing x86 (32- and 64-bit).")
             logger.error("-" * 80)
-            return -1
+            return E_INVALID_FILE_ARCH
         except UnsupportedOSError:
             logger.error("-" * 80)
             logger.error(" Input file does not appear to target a supported OS.")
@@ -942,18 +1011,19 @@ def main(argv=None):
                 " capa currently only supports analyzing executables for some operating systems (including Windows and Linux)."
             )
             logger.error("-" * 80)
-            return -1
+            return E_INVALID_FILE_OS
 
     meta = collect_metadata(argv, args.sample, args.rules, extractor)
 
     capabilities, counts = find_capabilities(rules, extractor, disable_progress=args.quiet)
     meta["analysis"].update(counts)
+    meta["analysis"]["layout"] = compute_layout(rules, extractor, capabilities)
 
     if has_file_limitation(rules, capabilities):
         # bail if capa encountered file limitation e.g. a packed binary
         # do show the output in verbose mode, though.
         if not (args.verbose or args.vverbose or args.json):
-            return -1
+            return E_FILE_LIMITATION
 
     if args.json:
         print(capa.render.json.render(meta, rules, capabilities))
@@ -980,10 +1050,10 @@ def ida_main():
     logging.getLogger().setLevel(logging.INFO)
 
     if not capa.ida.helpers.is_supported_ida_version():
-        return -1
+        return E_UNSUPPORTED_IDA_VERSION
 
     if not capa.ida.helpers.is_supported_file_type():
-        return -1
+        return E_INVALID_FILE_TYPE
 
     logger.debug("-" * 80)
     logger.debug(" Using default embedded rules.")
