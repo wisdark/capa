@@ -4,31 +4,119 @@
 
 ### New Features
 
-- engine: short circuit logic nodes for better performance #824 @williballenthin
-- engine: add optimizer the order faster nodes first #829 @williballenthin
-- engine: optimize rule evaluation by skipping rules that can't match #830 @williballenthin
-
 ### Breaking Changes
 
-### New Rules (3)
+### New Rules (0)
 
-- nursery/delete-windows-backup-catalog michael.hunhoff@mandiant.com
-- nursery/disable-automatic-windows-recovery-features michael.hunhoff@mandiant.com
 -
 
 ### Bug Fixes
-
-- fix circular import error #825 @williballenthin
 
 ### capa explorer IDA Pro plugin
 
 ### Development
 
-- add profiling infrastructure #828 @williballenthin
+### Raw diffs
+- [capa v3.2.0...master](https://github.com/mandiant/capa/compare/v3.2.0...master)
+- [capa-rules v3.2.0...master](https://github.com/mandiant/capa-rules/compare/v3.2.0...master)
+
+## v3.2.0 (2022-03-03)
+This release adds a new characteristic `characteristic: call $+5` enabling users to create more explicit rules. The linter now also validates ATT&CK and MBC categories. Additionally, many dependencies, including the vivisect backend, have been updated.
+
+One rule has been added and many more have been improved.
+
+Thanks for all the support, especially to @kn0wl3dge and first time contributor @uckelman-sf!
+
+### New Features
+
+- linter: validate ATT&CK/MBC categories and IDs #103 @kn0wl3dge
+- extractor: add characteristic "call $+5" feature #366 @kn0wl3dge
+
+### New Rules (1)
+
+- anti-analysis/obfuscation/obfuscated-with-advobfuscator jakub.jozwiak@mandiant.com
+
+### Bug Fixes
+
+- remove typing package as a requirement for Python 3.7+ compatibility #901 @uckelman-sf
+- elf: fix OS detection for Linux kernel modules #867 @williballenthin
 
 ### Raw diffs
-- [capa <release>...master](https://github.com/mandiant/capa/compare/v3.0.3...master)
-- [capa-rules <release>...master](https://github.com/mandiant/capa-rules/compare/v3.0.3...master)
+- [capa v3.1.0...v3.2.0](https://github.com/mandiant/capa/compare/v3.1.0...v3.2.0)
+- [capa-rules v3.1.0...v3.2.0](https://github.com/mandiant/capa-rules/compare/v3.1.0...v3.2.0)
+
+## v3.1.0 (2022-01-10)
+This release improves the performance of capa while also adding 23 new rules and many code quality enhancements. We profiled capa's CPU usage and optimized the way that it matches rules, such as by short circuiting when appropriate. According to our testing, the matching phase is approximately 66% faster than v3.0.3! We also added support for Python 3.10, aarch64 builds, and additional MAEC metadata in the rule headers.
+  
+This release adds 23 new rules, including nine by Jakub Jozwiak of Mandiant. @ryantxu1 and @dzbeck updated the ATT&CK and MBC mappings for many rules. Thank you!
+  
+And as always, welcome first time contributors!
+
+  - @kn0wl3dge
+  - @jtothej
+  - @cl30
+  
+
+### New Features
+
+- engine: short circuit logic nodes for better performance #824 @williballenthin
+- engine: add optimizer the order faster nodes first #829 @williballenthin
+- engine: optimize rule evaluation by skipping rules that can't match #830 @williballenthin
+- support python 3.10 #816 @williballenthin
+- support aarch64 #683 @williballenthin
+- rules: support maec/malware-family meta #841 @mr-tz
+- engine: better type annotations/exhaustiveness checking #839 @cl30
+
+### Breaking Changes: None
+
+### New Rules (23)
+
+- nursery/delete-windows-backup-catalog michael.hunhoff@mandiant.com
+- nursery/disable-automatic-windows-recovery-features michael.hunhoff@mandiant.com
+- nursery/capture-webcam-video @johnk3r
+- nursery/create-registry-key-via-stdregprov michael.hunhoff@mandiant.com
+- nursery/delete-registry-key-via-stdregprov michael.hunhoff@mandiant.com
+- nursery/delete-registry-value-via-stdregprov michael.hunhoff@mandiant.com
+- nursery/query-or-enumerate-registry-key-via-stdregprov michael.hunhoff@mandiant.com
+- nursery/query-or-enumerate-registry-value-via-stdregprov michael.hunhoff@mandiant.com
+- nursery/set-registry-value-via-stdregprov michael.hunhoff@mandiant.com
+- data-manipulation/compression/decompress-data-using-ucl jakub.jozwiak@mandiant.com
+- linking/static/wolfcrypt/linked-against-wolfcrypt jakub.jozwiak@mandiant.com
+- linking/static/wolfssl/linked-against-wolfssl jakub.jozwiak@mandiant.com
+- anti-analysis/packer/pespin/packed-with-pespin jakub.jozwiak@mandiant.com
+- load-code/shellcode/execute-shellcode-via-windows-fibers jakub.jozwiak@mandiant.com
+- load-code/shellcode/execute-shellcode-via-enumuilanguages jakub.jozwiak@mandiant.com
+- anti-analysis/packer/themida/packed-with-themida william.ballenthin@mandiant.com
+- load-code/shellcode/execute-shellcode-via-createthreadpoolwait jakub.jozwiak@mandiant.com
+- host-interaction/process/inject/inject-shellcode-using-a-file-mapping-object jakub.jozwiak@mandiant.com
+- load-code/shellcode/execute-shellcode-via-copyfile2 jakub.jozwiak@mandiant.com
+- malware-family/plugx/match-known-plugx-module still@teamt5.org
+
+### Rule Changes
+
+  - update ATT&CK mappings by @ryantxu1
+  - update ATT&CK and MBC mappings by @dzbeck
+  - aplib detection by @cdong1012
+  - golang runtime detection by @stevemk14eber
+
+### Bug Fixes
+
+- fix circular import error #825 @williballenthin
+- fix smda negative number extraction #430 @kn0wl3dge
+
+### capa explorer IDA Pro plugin
+
+- pin supported versions to >= 7.4 and < 8.0 #849 @mike-hunhoff
+
+### Development
+
+- add profiling infrastructure #828 @williballenthin
+- linter: detect shellcode extension #820 @mr-tz
+- show features script: add backend flag #430 @kn0wl3dge
+
+### Raw diffs
+- [capa v3.0.3...v3.1.0](https://github.com/mandiant/capa/compare/v3.0.3...v3.1.0)
+- [capa-rules v3.0.3...v3.1.0](https://github.com/mandiant/capa-rules/compare/v3.0.3...v3.1.0)
 
 
 ## v3.0.3 (2021-10-27)
