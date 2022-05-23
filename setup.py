@@ -20,7 +20,7 @@ requirements = [
     "ida-settings==2.1.0",
     "viv-utils[flirt]==0.6.11",
     "halo==0.0.31",
-    "networkx==2.5.1",
+    "networkx==2.8.2",
     "ruamel.yaml==0.17.21",
     "vivisect==1.0.7",
     "smda==1.7.0",
