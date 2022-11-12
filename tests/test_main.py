@@ -11,6 +11,12 @@ import textwrap
 
 import fixtures
 from fixtures import *
+from fixtures import (
+    _692f_dotnetfile_extractor,
+    _1c444_dotnetfile_extractor,
+    _039a6_dotnetfile_extractor,
+    _0953c_dotnetfile_extractor,
+)
 
 import capa.main
 import capa.rules
@@ -37,6 +43,8 @@ def test_main_single_rule(z9324d_extractor, tmpdir):
             meta:
                 name: test rule
                 scope: file
+                authors:
+                  - test
             features:
               - string: test
         """
@@ -326,6 +334,62 @@ def test_count_bb(z9324d_extractor):
     assert "count bb" in capabilities
 
 
+def test_instruction_scope(z9324d_extractor):
+    # .text:004071A4 68 E8 03 00 00          push    3E8h
+    rules = capa.rules.RuleSet(
+        [
+            capa.rules.Rule.from_yaml(
+                textwrap.dedent(
+                    """
+                    rule:
+                      meta:
+                        name: push 1000
+                        namespace: test
+                        scope: instruction
+                      features:
+                        - and:
+                          - mnemonic: push
+                          - number: 1000
+                    """
+                )
+            )
+        ]
+    )
+    capabilities, meta = capa.main.find_capabilities(rules, z9324d_extractor)
+    assert "push 1000" in capabilities
+    assert 0x4071A4 in set(map(lambda result: result[0], capabilities["push 1000"]))
+
+
+def test_instruction_subscope(z9324d_extractor):
+    # .text:00406F60                         sub_406F60 proc near
+    # [...]
+    # .text:004071A4 68 E8 03 00 00          push    3E8h
+    rules = capa.rules.RuleSet(
+        [
+            capa.rules.Rule.from_yaml(
+                textwrap.dedent(
+                    """
+                    rule:
+                      meta:
+                        name: push 1000 on i386
+                        namespace: test
+                        scope: function
+                      features:
+                        - and:
+                          - arch: i386
+                          - instruction:
+                            - mnemonic: push
+                            - number: 1000
+                    """
+                )
+            )
+        ]
+    )
+    capabilities, meta = capa.main.find_capabilities(rules, z9324d_extractor)
+    assert "push 1000 on i386" in capabilities
+    assert 0x406F60 in set(map(lambda result: result[0], capabilities["push 1000 on i386"]))
+
+
 def test_fix262(pma16_01_extractor, capsys):
     # tests rules can be loaded successfully and all output modes
     path = pma16_01_extractor.path
@@ -382,6 +446,51 @@ def test_json_meta(capsys):
     assert capa.main.main([path, "-j"]) == 0
     std = capsys.readouterr()
     std_json = json.loads(std.out)
-    # remember: json can't have integer keys :-(
-    assert str(0x10001010) in std_json["meta"]["analysis"]["layout"]["functions"]
-    assert 0x10001179 in std_json["meta"]["analysis"]["layout"]["functions"][str(0x10001010)]["matched_basic_blocks"]
+
+    assert {"type": "absolute", "value": 0x10001010} in list(
+        map(lambda f: f["address"], std_json["meta"]["analysis"]["layout"]["functions"])
+    )
+
+    for addr, info in std_json["meta"]["analysis"]["layout"]["functions"]:
+        if addr == ["absolute", 0x10001010]:
+            assert {"address": ["absolute", 0x10001179]} in info["matched_basic_blocks"]
+
+
+def test_main_dotnet(_1c444_dotnetfile_extractor):
+    # tests rules can be loaded successfully and all output modes
+    path = _1c444_dotnetfile_extractor.path
+    assert capa.main.main([path, "-vv"]) == 0
+    assert capa.main.main([path, "-v"]) == 0
+    assert capa.main.main([path, "-j"]) == 0
+    assert capa.main.main([path, "-q"]) == 0
+    assert capa.main.main([path]) == 0
+
+
+def test_main_dotnet2(_692f_dotnetfile_extractor):
+    # tests rules can be loaded successfully and all output modes
+    path = _692f_dotnetfile_extractor.path
+    assert capa.main.main([path, "-vv"]) == 0
+    assert capa.main.main([path, "-v"]) == 0
+    assert capa.main.main([path, "-j"]) == 0
+    assert capa.main.main([path, "-q"]) == 0
+    assert capa.main.main([path]) == 0
+
+
+def test_main_dotnet3(_0953c_dotnetfile_extractor):
+    # tests rules can be loaded successfully and all output modes
+    path = _0953c_dotnetfile_extractor.path
+    assert capa.main.main([path, "-vv"]) == 0
+    assert capa.main.main([path, "-v"]) == 0
+    assert capa.main.main([path, "-j"]) == 0
+    assert capa.main.main([path, "-q"]) == 0
+    assert capa.main.main([path]) == 0
+
+
+def test_main_dotnet4(_039a6_dotnetfile_extractor):
+    # tests rules can be loaded successfully and all output modes
+    path = _039a6_dotnetfile_extractor.path
+    assert capa.main.main([path, "-vv"]) == 0
+    assert capa.main.main([path, "-v"]) == 0
+    assert capa.main.main([path, "-j"]) == 0
+    assert capa.main.main([path, "-q"]) == 0
+    assert capa.main.main([path]) == 0

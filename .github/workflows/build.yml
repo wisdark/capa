@@ -1,8 +1,8 @@
 name: build
 
 on:
-  push:
-    branches: [master]
+  pull_request:
+    branches: [ master ]
   release:
     types: [edited, published]
 
@@ -11,6 +11,8 @@ jobs:
     name: PyInstaller for ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
+      # set to false for debugging
+      fail-fast: true
       matrix:
         include:
           - os: ubuntu-18.04
@@ -20,7 +22,8 @@ jobs:
           - os: windows-2019
             artifact_name: capa.exe
             asset_name: windows
-          - os: macos-10.15
+          - os: macos-11
+            # use older macOS for assumed better portability
             artifact_name: capa
             asset_name: macos
     steps:
@@ -35,12 +38,12 @@ jobs:
           python-version: 3.8
       - if: matrix.os == 'ubuntu-18.04'
         run: sudo apt-get install -y libyaml-dev
-      - name: Install PyInstaller
-        run: pip install 'pyinstaller==4.2'
-      - name: Install capa
-        run: pip install -e .
+      - name: Upgrade pip, setuptools
+        run: python -m pip install --upgrade pip setuptools
+      - name: Install capa with build requirements
+        run: pip install -e .[build]
       - name: Build standalone executable
-        run: pyinstaller .github/pyinstaller/pyinstaller.spec
+        run: pyinstaller --log-level DEBUG .github/pyinstaller/pyinstaller.spec
       - name: Does it run (PE)?
         run: dist/capa "tests/data/Practical Malware Analysis Lab 01-01.dll_"
       - name: Does it run (Shellcode)?
@@ -53,8 +56,6 @@ jobs:
           path: dist/${{ matrix.artifact_name }}
 
   test_run:
-    # test that binaries run on push to master
-    if: github.event_name == 'push'
     name: Test run on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     needs: [build]
@@ -68,7 +69,7 @@ jobs:
           - os: ubuntu-20.04
             artifact_name: capa
             asset_name: linux
-          - os: windows-2016
+          - os: windows-2022
             artifact_name: capa.exe
             asset_name: windows
     steps:
@@ -77,7 +78,7 @@ jobs:
         with:
           name: ${{ matrix.asset_name }}
       - name: Set executable flag
-        if: matrix.os != 'windows-2016'
+        if: matrix.os != 'windows-2022'      
         run: chmod +x ${{ matrix.artifact_name }}
       - name: Run capa
         run: ./${{ matrix.artifact_name }} -h

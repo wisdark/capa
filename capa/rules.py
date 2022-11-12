@@ -12,7 +12,6 @@ import uuid
 import codecs
 import logging
 import binascii
-import functools
 import collections
 from enum import Enum
 
@@ -28,6 +27,7 @@ except ImportError:
 from typing import Any, Set, Dict, List, Tuple, Union, Iterator
 
 import yaml
+import pydantic
 import ruamel.yaml
 
 import capa.perf
@@ -40,6 +40,7 @@ import capa.features.common
 import capa.features.basicblock
 from capa.engine import Statement, FeatureSet
 from capa.features.common import MAX_BYTES_FEATURE_SIZE, Feature
+from capa.features.address import Address
 
 logger = logging.getLogger(__name__)
 
@@ -48,13 +49,12 @@ logger = logging.getLogger(__name__)
 META_KEYS = (
     "name",
     "namespace",
-    "rule-category",
     "maec/analysis-conclusion",
     "maec/analysis-conclusion-ov",
     "maec/malware-family",
     "maec/malware-category",
     "maec/malware-category-ov",
-    "author",
+    "authors",
     "description",
     "lib",
     "scope",
@@ -74,14 +74,25 @@ class Scope(str, Enum):
     FILE = "file"
     FUNCTION = "function"
     BASIC_BLOCK = "basic block"
+    INSTRUCTION = "instruction"
 
 
 FILE_SCOPE = Scope.FILE.value
 FUNCTION_SCOPE = Scope.FUNCTION.value
 BASIC_BLOCK_SCOPE = Scope.BASIC_BLOCK.value
+INSTRUCTION_SCOPE = Scope.INSTRUCTION.value
+# used only to specify supported features per scope.
+# not used to validate rules.
+GLOBAL_SCOPE = "global"
 
 
-SUPPORTED_FEATURES = {
+SUPPORTED_FEATURES: Dict[str, Set] = {
+    GLOBAL_SCOPE: {
+        # these will be added to other scopes, see below.
+        capa.features.common.OS,
+        capa.features.common.Arch,
+        capa.features.common.Format,
+    },
     FILE_SCOPE: {
         capa.features.common.MatchedRule,
         capa.features.file.Export,
@@ -90,42 +101,57 @@ SUPPORTED_FEATURES = {
         capa.features.file.FunctionName,
         capa.features.common.Characteristic("embedded pe"),
         capa.features.common.String,
-        capa.features.common.Format,
-        capa.features.common.OS,
-        capa.features.common.Arch,
+        capa.features.common.Class,
+        capa.features.common.Namespace,
+        capa.features.common.Characteristic("mixed mode"),
     },
     FUNCTION_SCOPE: {
-        # plus basic block scope features, see below
+        capa.features.common.MatchedRule,
         capa.features.basicblock.BasicBlock,
         capa.features.common.Characteristic("calls from"),
         capa.features.common.Characteristic("calls to"),
         capa.features.common.Characteristic("loop"),
         capa.features.common.Characteristic("recursive call"),
-        capa.features.common.OS,
-        capa.features.common.Arch,
+        # plus basic block scope features, see below
     },
     BASIC_BLOCK_SCOPE: {
         capa.features.common.MatchedRule,
+        capa.features.common.Characteristic("tight loop"),
+        capa.features.common.Characteristic("stack string"),
+        # plus instruction scope features, see below
+    },
+    INSTRUCTION_SCOPE: {
+        capa.features.common.MatchedRule,
         capa.features.insn.API,
+        capa.features.insn.Property,
         capa.features.insn.Number,
         capa.features.common.String,
         capa.features.common.Bytes,
         capa.features.insn.Offset,
         capa.features.insn.Mnemonic,
+        capa.features.insn.OperandNumber,
+        capa.features.insn.OperandOffset,
         capa.features.common.Characteristic("nzxor"),
         capa.features.common.Characteristic("peb access"),
         capa.features.common.Characteristic("fs access"),
         capa.features.common.Characteristic("gs access"),
-        capa.features.common.Characteristic("cross section flow"),
-        capa.features.common.Characteristic("tight loop"),
-        capa.features.common.Characteristic("stack string"),
         capa.features.common.Characteristic("indirect call"),
         capa.features.common.Characteristic("call $+5"),
-        capa.features.common.OS,
-        capa.features.common.Arch,
+        capa.features.common.Characteristic("cross section flow"),
+        capa.features.common.Characteristic("unmanaged call"),
+        capa.features.common.Class,
+        capa.features.common.Namespace,
     },
 }
 
+# global scope features are available in all other scopes
+SUPPORTED_FEATURES[INSTRUCTION_SCOPE].update(SUPPORTED_FEATURES[GLOBAL_SCOPE])
+SUPPORTED_FEATURES[BASIC_BLOCK_SCOPE].update(SUPPORTED_FEATURES[GLOBAL_SCOPE])
+SUPPORTED_FEATURES[FUNCTION_SCOPE].update(SUPPORTED_FEATURES[GLOBAL_SCOPE])
+SUPPORTED_FEATURES[FILE_SCOPE].update(SUPPORTED_FEATURES[GLOBAL_SCOPE])
+
+# all instruction scope features are also basic block features
+SUPPORTED_FEATURES[BASIC_BLOCK_SCOPE].update(SUPPORTED_FEATURES[INSTRUCTION_SCOPE])
 # all basic block scope features are also function scope features
 SUPPORTED_FEATURES[FUNCTION_SCOPE].update(SUPPORTED_FEATURES[BASIC_BLOCK_SCOPE])
 
@@ -238,20 +264,8 @@ def parse_feature(key: str):
         return capa.features.common.Bytes
     elif key == "number":
         return capa.features.insn.Number
-    elif key.startswith("number/"):
-        bitness = key.partition("/")[2]
-        # the other handlers here return constructors for features,
-        # and we want to as well,
-        # however, we need to preconfigure one of the arguments (`bitness`).
-        # so, instead we return a partially-applied function that
-        #  provides `bitness` to the feature constructor.
-        # it forwards any other arguments provided to the closure along to the constructor.
-        return functools.partial(capa.features.insn.Number, bitness=bitness)
     elif key == "offset":
         return capa.features.insn.Offset
-    elif key.startswith("offset/"):
-        bitness = key.partition("/")[2]
-        return functools.partial(capa.features.insn.Offset, bitness=bitness)
     elif key == "mnemonic":
         return capa.features.insn.Mnemonic
     elif key == "basic blocks":
@@ -273,8 +287,13 @@ def parse_feature(key: str):
     elif key == "format":
         return capa.features.common.Format
     elif key == "arch":
-
         return capa.features.common.Arch
+    elif key == "class":
+        return capa.features.common.Class
+    elif key == "namespace":
+        return capa.features.common.Namespace
+    elif key == "property":
+        return capa.features.insn.Property
     else:
         raise InvalidRule("unexpected statement: %s" % key)
 
@@ -341,7 +360,14 @@ def parse_description(s: Union[str, int, bytes], value_type: str, description=No
             # the string "10" that needs to become the number 10.
             if value_type == "bytes":
                 value = parse_bytes(value)
-            elif value_type in ("number", "offset") or value_type.startswith(("number/", "offset/")):
+            elif (
+                value_type in ("number", "offset")
+                or value_type.startswith(("number/", "offset/"))
+                or (
+                    value_type.startswith("operand[")
+                    and (value_type.endswith("].number") or value_type.endswith("].offset"))
+                )
+            ):
                 try:
                     value = parse_int(value)
                 except ValueError:
@@ -419,7 +445,7 @@ def build_statements(d, scope: str):
         if len(d[key]) != 1:
             raise InvalidRule("subscope must have exactly one child statement")
 
-        return ceng.Subscope(FUNCTION_SCOPE, build_statements(d[key][0], FUNCTION_SCOPE))
+        return ceng.Subscope(FUNCTION_SCOPE, build_statements(d[key][0], FUNCTION_SCOPE), description=description)
 
     elif key == "basic block":
         if scope != FUNCTION_SCOPE:
@@ -428,7 +454,30 @@ def build_statements(d, scope: str):
         if len(d[key]) != 1:
             raise InvalidRule("subscope must have exactly one child statement")
 
-        return ceng.Subscope(BASIC_BLOCK_SCOPE, build_statements(d[key][0], BASIC_BLOCK_SCOPE))
+        return ceng.Subscope(BASIC_BLOCK_SCOPE, build_statements(d[key][0], BASIC_BLOCK_SCOPE), description=description)
+
+    elif key == "instruction":
+        if scope not in (FUNCTION_SCOPE, BASIC_BLOCK_SCOPE):
+            raise InvalidRule("instruction subscope supported only for function and basic block scope")
+
+        if len(d[key]) == 1:
+            statements = build_statements(d[key][0], INSTRUCTION_SCOPE)
+        else:
+            # for instruction subscopes, we support a shorthand in which the top level AND is implied.
+            # the following are equivalent:
+            #
+            #     - instruction:
+            #       - and:
+            #         - arch: i386
+            #         - mnemonic: cmp
+            #
+            #     - instruction:
+            #       - arch: i386
+            #       - mnemonic: cmp
+            #
+            statements = ceng.And([build_statements(dd, INSTRUCTION_SCOPE) for dd in d[key]])
+
+        return ceng.Subscope(INSTRUCTION_SCOPE, statements, description=description)
 
     elif key.startswith("count(") and key.endswith(")"):
         # e.g.:
@@ -485,12 +534,57 @@ def build_statements(d, scope: str):
             raise InvalidRule("unexpected range: %s" % (count))
     elif key == "string" and not isinstance(d[key], str):
         raise InvalidRule("ambiguous string value %s, must be defined as explicit string" % d[key])
+
+    elif key.startswith("operand[") and key.endswith("].number"):
+        index = key[len("operand[") : -len("].number")]
+        try:
+            index = int(index)
+        except ValueError:
+            raise InvalidRule("operand index must be an integer")
+
+        value, description = parse_description(d[key], key, d.get("description"))
+        try:
+            feature = capa.features.insn.OperandNumber(index, value, description=description)
+        except ValueError as e:
+            raise InvalidRule(str(e))
+        ensure_feature_valid_for_scope(scope, feature)
+        return feature
+
+    elif key.startswith("operand[") and key.endswith("].offset"):
+        index = key[len("operand[") : -len("].offset")]
+        try:
+            index = int(index)
+        except ValueError:
+            raise InvalidRule("operand index must be an integer")
+
+        value, description = parse_description(d[key], key, d.get("description"))
+        try:
+            feature = capa.features.insn.OperandOffset(index, value, description=description)
+        except ValueError as e:
+            raise InvalidRule(str(e))
+        ensure_feature_valid_for_scope(scope, feature)
+        return feature
+
     elif (
         (key == "os" and d[key] not in capa.features.common.VALID_OS)
         or (key == "format" and d[key] not in capa.features.common.VALID_FORMAT)
         or (key == "arch" and d[key] not in capa.features.common.VALID_ARCH)
     ):
         raise InvalidRule("unexpected %s value %s" % (key, d[key]))
+
+    elif key.startswith("property/"):
+        access = key[len("property/") :]
+        if access not in capa.features.common.VALID_FEATURE_ACCESS:
+            raise InvalidRule("unexpected %s access %s" % (key, access))
+
+        value, description = parse_description(d[key], key, d.get("description"))
+        try:
+            feature = capa.features.insn.Property(value, access=access, description=description)
+        except ValueError as e:
+            raise InvalidRule(str(e))
+        ensure_feature_valid_for_scope(scope, feature)
+        return feature
+
     else:
         Feature = parse_feature(key)
         value, description = parse_description(d[key], key, d.get("description"))
@@ -608,6 +702,9 @@ class Rule:
                 for new_rule in self._extract_subscope_rules_rec(child):
                     yield new_rule
 
+    def is_subscope_rule(self):
+        return bool(self.meta.get("capa/subscope-rule", False))
+
     def extract_subscope_rules(self):
         """
         scan through the statements of this rule,
@@ -721,8 +818,16 @@ class Rule:
     def from_yaml_file(cls, path, use_ruamel=False):
         with open(path, "rb") as f:
             try:
-                return cls.from_yaml(f.read().decode("utf-8"), use_ruamel=use_ruamel)
+                rule = cls.from_yaml(f.read().decode("utf-8"), use_ruamel=use_ruamel)
+                # import here to avoid circular dependency
+                from capa.render.result_document import RuleMetadata
+
+                # validate meta data fields
+                _ = RuleMetadata.from_capa(rule)
+                return rule
             except InvalidRule as e:
+                raise InvalidRuleWithPath(path, str(e))
+            except pydantic.ValidationError as e:
                 raise InvalidRuleWithPath(path, str(e))
 
     def to_yaml(self):
@@ -978,6 +1083,7 @@ class RuleSet:
         self.file_rules = self._get_rules_for_scope(rules, FILE_SCOPE)
         self.function_rules = self._get_rules_for_scope(rules, FUNCTION_SCOPE)
         self.basic_block_rules = self._get_rules_for_scope(rules, BASIC_BLOCK_SCOPE)
+        self.instruction_rules = self._get_rules_for_scope(rules, INSTRUCTION_SCOPE)
         self.rules = {rule.name: rule for rule in rules}
         self.rules_by_namespace = index_rules_by_namespace(rules)
 
@@ -988,6 +1094,9 @@ class RuleSet:
         )
         (self._easy_basic_block_rules_by_feature, self._hard_basic_block_rules) = self._index_rules_by_feature(
             self.basic_block_rules
+        )
+        (self._easy_instruction_rules_by_feature, self._hard_instruction_rules) = self._index_rules_by_feature(
+            self.instruction_rules
         )
 
     def __len__(self):
@@ -1014,6 +1123,9 @@ class RuleSet:
         at this time, a rule evaluator can't do anything special with
         the "hard rules". it must still do a full top-down match of each
         rule, in topological order.
+
+        this does not index global features, because these are not selective, and
+        won't be used as the sole feature used to match.
         """
 
         # we'll do a couple phases:
@@ -1052,9 +1164,21 @@ class RuleSet:
                 # hard feature: requires scan or match lookup
                 rules_with_hard_features.add(rule_name)
             elif isinstance(node, capa.features.common.Feature):
-                # easy feature: hash lookup
-                rules_with_easy_features.add(rule_name)
-                rules_by_feature[node].add(rule_name)
+                if capa.features.common.is_global_feature(node):
+                    # we don't want to index global features
+                    # because they're not very selective.
+                    #
+                    # they're global, so if they match at one location in a file,
+                    # they'll match at every location in a file.
+                    # so thats not helpful to decide how to downselect.
+                    #
+                    # and, a global rule will never be the sole selector in a rule.
+                    # TODO: probably want a lint for this.
+                    pass
+                else:
+                    # easy feature: hash lookup
+                    rules_with_easy_features.add(rule_name)
+                    rules_by_feature[node].add(rule_name)
             elif isinstance(node, (ceng.Not)):
                 # `not:` statements are tricky to deal with.
                 #
@@ -1150,7 +1274,7 @@ class RuleSet:
         #  at lower scope, e.g. function scope.
         # so, we find all dependencies of all rules, and later will filter them down.
         for rule in rules:
-            if rule.meta.get("capa/subscope-rule", False):
+            if rule.is_subscope_rule():
                 continue
 
             scope_rules.update(get_rules_and_dependencies(rules, rule.name))
@@ -1195,9 +1319,15 @@ class RuleSet:
                     logger.debug('using rule "%s" and dependencies, found tag in meta.%s: %s', rule.name, k, v)
                     rules_filtered.update(set(capa.rules.get_rules_and_dependencies(rules, rule.name)))
                     break
+                if isinstance(v, list):
+                    for vv in v:
+                        if tag in vv:
+                            logger.debug('using rule "%s" and dependencies, found tag in meta.%s: %s', rule.name, k, vv)
+                            rules_filtered.update(set(capa.rules.get_rules_and_dependencies(rules, rule.name)))
+                            break
         return RuleSet(list(rules_filtered))
 
-    def match(self, scope: Scope, features: FeatureSet, va: int) -> Tuple[FeatureSet, ceng.MatchResults]:
+    def match(self, scope: Scope, features: FeatureSet, addr: Address) -> Tuple[FeatureSet, ceng.MatchResults]:
         """
         match rules from this ruleset at the given scope against the given features.
 
@@ -1214,6 +1344,9 @@ class RuleSet:
         elif scope is Scope.BASIC_BLOCK:
             easy_rules_by_feature = self._easy_basic_block_rules_by_feature
             hard_rule_names = self._hard_basic_block_rules
+        elif scope is Scope.INSTRUCTION:
+            easy_rules_by_feature = self._easy_instruction_rules_by_feature
+            hard_rule_names = self._hard_instruction_rules
         else:
             assert_never(scope)
 
@@ -1226,7 +1359,7 @@ class RuleSet:
         # first, match against the set of rules that have at least one
         # feature shared with our feature set.
         candidate_rules = [self.rules[name] for name in candidate_rule_names]
-        features2, easy_matches = ceng.match(candidate_rules, features, va)
+        features2, easy_matches = ceng.match(candidate_rules, features, addr)
 
         # note that we've stored the updated feature set in `features2`.
         # this contains a superset of the features in `features`;
@@ -1245,7 +1378,7 @@ class RuleSet:
         # that we can't really make any guesses about.
         # these are rules with hard features, like substring/regex/bytes and match statements.
         hard_rules = [self.rules[name] for name in hard_rule_names]
-        features3, hard_matches = ceng.match(hard_rules, features2, va)
+        features3, hard_matches = ceng.match(hard_rules, features2, addr)
 
         # note that above, we probably are skipping matching a bunch of
         # rules that definitely would never hit.

@@ -43,7 +43,6 @@ import capa.rules
 import capa.engine
 import capa.features
 import capa.features.insn
-from capa.features.common import BITNESS_X32, BITNESS_X64, String
 
 logger = logging.getLogger("capa2yara")
 
@@ -181,7 +180,15 @@ def convert_rule(rule, rulename, cround, depth):
             logger.info("doing api: " + repr(api))
 
             #    e.g. kernel32.CreateNamedPipe => look for kernel32.dll and CreateNamedPipe
-            if "." in api:
+            # TODO: improve .NET API call handling
+            if "::" in api:
+                mod, api = api.split("::")
+
+                var_name = "api_" + var_names.pop(0)
+                yara_strings += "\t$" + var_name + " = /\\b" + api + "(A|W)?\\b/ ascii wide\n"
+                yara_condition += "\t$" + var_name + " "
+
+            elif api.count(".") == 1:
                 dll, api = api.split(".")
 
                 # usage of regex is needed and /i because string search for "CreateMutex" in imports() doesn't look for e.g. CreateMutexA
@@ -311,7 +318,7 @@ def convert_rule(rule, rulename, cround, depth):
 
         return yara_strings, yara_condition
 
-    ############################## end def do_statement
+    # end: def do_statement
 
     yara_strings_list = []
     yara_condition_list = []
@@ -390,7 +397,9 @@ def convert_rule(rule, rulename, cround, depth):
                 logger.info("kid coming: " + repr(kid.name))
                 # logger.info("grandchildren: " + repr(kid.children))
 
-                ##### here we go into RECURSION  ##################################################################################
+                #
+                # here we go into RECURSION
+                #
                 yara_strings_sub, yara_condition_sub, rule_comment_sub, incomplete_sub = convert_rule(
                     kid, rulename, cround, depth
                 )
@@ -496,9 +505,7 @@ def convert_rule(rule, rulename, cround, depth):
 
         yara_condition = "\n\t" + yara_condition_list[0]
 
-    logger.info(
-        f"################# end of convert_rule() #strings: {len(yara_strings_list)} #conditions: {len(yara_condition_list)}"
-    )
+    logger.info(f"# end of convert_rule() #strings: {len(yara_strings_list)} #conditions: {len(yara_condition_list)}")
     logger.info(f"strings: {yara_strings} conditions: {yara_condition}")
 
     return yara_strings, yara_condition, rule_comment, incomplete
@@ -535,7 +542,7 @@ def convert_rules(rules, namespaces, cround):
 
         rule_name = convert_rule_name(rule.name)
 
-        if rule.meta.get("capa/subscope-rule", False):
+        if rule.is_subscope_rule():
             logger.info("skipping sub scope rule capa: " + rule.name)
             continue
 
@@ -617,7 +624,7 @@ def convert_rules(rules, namespaces, cround):
 
                             # examples in capa can contain the same hash several times with different offset, so check if it's already there:
                             # (keeping the offset might be interessting for some but breaks yara-ci for checking of the final rules
-                            if not value in seen_hashes:
+                            if value not in seen_hashes:
                                 yara_meta += "\t" + meta_name + ' = "' + value + '"\n'
                                 seen_hashes.append(value)
 
@@ -703,7 +710,7 @@ def main(argv=None):
     logging.getLogger("capa2yara").setLevel(level)
 
     try:
-        rules = capa.main.get_rules(args.rules, disable_progress=True)
+        rules = capa.main.get_rules([args.rules], disable_progress=True)
         namespaces = capa.rules.index_rules_by_namespace(list(rules))
         rules = capa.rules.RuleSet(rules)
         logger.info("successfully loaded %s rules (including subscope rules which will be ignored)", len(rules))

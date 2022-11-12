@@ -13,6 +13,7 @@ import binascii
 import itertools
 import contextlib
 import collections
+from typing import Set, Dict
 from functools import lru_cache
 
 import pytest
@@ -24,19 +25,26 @@ import capa.features.common
 import capa.features.basicblock
 from capa.features.common import (
     OS,
+    OS_ANY,
     OS_LINUX,
     ARCH_I386,
     FORMAT_PE,
     ARCH_AMD64,
     FORMAT_ELF,
     OS_WINDOWS,
-    BITNESS_X32,
-    BITNESS_X64,
+    FORMAT_DOTNET,
     Arch,
     Format,
+    Feature,
+    FeatureAccess,
 )
+from capa.features.address import Address
+from capa.features.extractors.base_extractor import BBHandle, InsnHandle, FunctionHandle
+from capa.features.extractors.dnfile.extractor import DnfileFeatureExtractor
 
 CD = os.path.dirname(__file__)
+DOTNET_DIR = os.path.join(CD, "data", "dotnet")
+DNFILE_TESTFILES = os.path.join(DOTNET_DIR, "dnfile-testfiles")
 
 
 @contextlib.contextmanager
@@ -131,7 +139,35 @@ def get_smda_extractor(path):
 def get_pefile_extractor(path):
     import capa.features.extractors.pefile
 
-    return capa.features.extractors.pefile.PefileFeatureExtractor(path)
+    extractor = capa.features.extractors.pefile.PefileFeatureExtractor(path)
+
+    # overload the extractor so that the fixture exposes `extractor.path`
+    setattr(extractor, "path", path)
+
+    return extractor
+
+
+def get_dotnetfile_extractor(path):
+    import capa.features.extractors.dotnetfile
+
+    extractor = capa.features.extractors.dotnetfile.DotnetFileFeatureExtractor(path)
+
+    # overload the extractor so that the fixture exposes `extractor.path`
+    setattr(extractor, "path", path)
+
+    return extractor
+
+
+@lru_cache(maxsize=1)
+def get_dnfile_extractor(path):
+    import capa.features.extractors.dnfile.extractor
+
+    extractor = capa.features.extractors.dnfile.extractor.DnfileFeatureExtractor(path)
+
+    # overload the extractor so that the fixture exposes `extractor.path`
+    setattr(extractor, "path", path)
+
+    return extractor
 
 
 def extract_global_features(extractor):
@@ -150,27 +186,35 @@ def extract_file_features(extractor):
 
 
 # f may not be hashable (e.g. ida func_t) so cannot @lru_cache this
-def extract_function_features(extractor, f):
+def extract_function_features(extractor, fh):
     features = collections.defaultdict(set)
-    for bb in extractor.get_basic_blocks(f):
-        for insn in extractor.get_instructions(f, bb):
-            for feature, va in extractor.extract_insn_features(f, bb, insn):
+    for bb in extractor.get_basic_blocks(fh):
+        for insn in extractor.get_instructions(fh, bb):
+            for feature, va in extractor.extract_insn_features(fh, bb, insn):
                 features[feature].add(va)
-        for feature, va in extractor.extract_basic_block_features(f, bb):
+        for feature, va in extractor.extract_basic_block_features(fh, bb):
             features[feature].add(va)
-    for feature, va in extractor.extract_function_features(f):
+    for feature, va in extractor.extract_function_features(fh):
         features[feature].add(va)
     return features
 
 
 # f may not be hashable (e.g. ida func_t) so cannot @lru_cache this
-def extract_basic_block_features(extractor, f, bb):
+def extract_basic_block_features(extractor, fh, bbh):
     features = collections.defaultdict(set)
-    for insn in extractor.get_instructions(f, bb):
-        for feature, va in extractor.extract_insn_features(f, bb, insn):
+    for insn in extractor.get_instructions(fh, bbh):
+        for feature, va in extractor.extract_insn_features(fh, bbh, insn):
             features[feature].add(va)
-    for feature, va in extractor.extract_basic_block_features(f, bb):
+    for feature, va in extractor.extract_basic_block_features(fh, bbh):
         features[feature].add(va)
+    return features
+
+
+# f may not be hashable (e.g. ida func_t) so cannot @lru_cache this
+def extract_instruction_features(extractor, fh, bbh, ih) -> Dict[Feature, Set[Address]]:
+    features = collections.defaultdict(set)
+    for feature, addr in extractor.extract_insn_features(fh, bbh, ih):
+        features[feature].add(addr)
     return features
 
 
@@ -224,6 +268,22 @@ def get_data_path_by_name(name):
         return os.path.join(CD, "data", "79abd17391adc6251ecdc58d13d76baf.dll_")
     elif name.startswith("946a9"):
         return os.path.join(CD, "data", "946a99f36a46d335dec080d9a4371940.dll_")
+    elif name.startswith("2f7f5f"):
+        return os.path.join(CD, "data", "2f7f5fb5de175e770d7eae87666f9831.elf_")
+    elif name.startswith("b9f5b"):
+        return os.path.join(CD, "data", "b9f5bd514485fb06da39beff051b9fdc.exe_")
+    elif name.startswith("mixed-mode-64"):
+        return os.path.join(DNFILE_TESTFILES, "mixed-mode", "ModuleCode", "bin", "ModuleCode_amd64.exe")
+    elif name.startswith("hello-world"):
+        return os.path.join(DNFILE_TESTFILES, "hello-world", "hello-world.exe")
+    elif name.startswith("_1c444"):
+        return os.path.join(CD, "data", "dotnet", "1c444ebeba24dcba8628b7dfe5fec7c6.exe_")
+    elif name.startswith("_692f"):
+        return os.path.join(CD, "data", "dotnet", "692f7fd6d198e804d6af98eb9e390d61.exe_")
+    elif name.startswith("_0953c"):
+        return os.path.join(CD, "data", "0953cc3b77ed2974b09e3a00708f88de931d681e2d0cb64afbaf714610beabe6.exe_")
+    elif name.startswith("_039a6"):
+        return os.path.join(CD, "data", "039a6336d0802a2255669e6867a5679c7eb83313dbc61fb1c7232147379bd304.exe_")
     else:
         raise ValueError("unexpected sample fixture: %s" % name)
 
@@ -276,7 +336,9 @@ def get_sample_md5_by_name(name):
     elif name.startswith("79abd"):
         return "79abd17391adc6251ecdc58d13d76baf"
     elif name.startswith("946a9"):
-        return "946a99f36a46d335dec080d9a4371940.dll_"
+        return "946a99f36a46d335dec080d9a4371940"
+    elif name.startswith("b9f5b"):
+        return "b9f5bd514485fb06da39beff051b9fdc"
     else:
         raise ValueError("unexpected sample fixture: %s" % name)
 
@@ -290,18 +352,44 @@ def sample(request):
     return resolve_sample(request.param)
 
 
-def get_function(extractor, fva):
-    for f in extractor.get_functions():
-        if int(f) == fva:
-            return f
+def get_function(extractor, fva: int) -> FunctionHandle:
+    for fh in extractor.get_functions():
+        if isinstance(extractor, DnfileFeatureExtractor):
+            addr = fh.inner.offset
+        else:
+            addr = fh.address
+        if addr == fva:
+            return fh
     raise ValueError("function not found")
 
 
-def get_basic_block(extractor, f, va):
-    for bb in extractor.get_basic_blocks(f):
-        if int(bb) == va:
-            return bb
+def get_function_by_token(extractor, token: int) -> FunctionHandle:
+    for fh in extractor.get_functions():
+        if fh.address == token:
+            return fh
+    raise ValueError("function not found by token")
+
+
+def get_basic_block(extractor, fh: FunctionHandle, va: int) -> BBHandle:
+    for bbh in extractor.get_basic_blocks(fh):
+        if isinstance(extractor, DnfileFeatureExtractor):
+            addr = bbh.inner.offset
+        else:
+            addr = bbh.address
+        if addr == va:
+            return bbh
     raise ValueError("basic block not found")
+
+
+def get_instruction(extractor, fh: FunctionHandle, bbh: BBHandle, va: int) -> InsnHandle:
+    for ih in extractor.get_instructions(fh, bbh):
+        if isinstance(extractor, DnfileFeatureExtractor):
+            addr = ih.inner.offset
+        else:
+            addr = ih.address
+        if addr == va:
+            return ih
+    raise ValueError("instruction not found")
 
 
 def resolve_scope(scope):
@@ -315,29 +403,56 @@ def resolve_scope(scope):
 
         inner_file.__name__ = scope
         return inner_file
+    elif "insn=" in scope:
+        # like `function=0x401000,bb=0x40100A,insn=0x40100A`
+        assert "function=" in scope
+        assert "bb=" in scope
+        assert "insn=" in scope
+        fspec, _, spec = scope.partition(",")
+        bbspec, _, ispec = spec.partition(",")
+        fva = int(fspec.partition("=")[2], 0x10)
+        bbva = int(bbspec.partition("=")[2], 0x10)
+        iva = int(ispec.partition("=")[2], 0x10)
+
+        def inner_insn(extractor):
+            fh = get_function(extractor, fva)
+            bbh = get_basic_block(extractor, fh, bbva)
+            ih = get_instruction(extractor, fh, bbh, iva)
+            features = extract_instruction_features(extractor, fh, bbh, ih)
+            for k, vs in extract_global_features(extractor).items():
+                features[k].update(vs)
+            return features
+
+        inner_insn.__name__ = scope
+        return inner_insn
     elif "bb=" in scope:
         # like `function=0x401000,bb=0x40100A`
+        assert "function=" in scope
+        assert "bb=" in scope
         fspec, _, bbspec = scope.partition(",")
         fva = int(fspec.partition("=")[2], 0x10)
         bbva = int(bbspec.partition("=")[2], 0x10)
 
         def inner_bb(extractor):
-            f = get_function(extractor, fva)
-            bb = get_basic_block(extractor, f, bbva)
-            features = extract_basic_block_features(extractor, f, bb)
+            fh = get_function(extractor, fva)
+            bbh = get_basic_block(extractor, fh, bbva)
+            features = extract_basic_block_features(extractor, fh, bbh)
             for k, vs in extract_global_features(extractor).items():
                 features[k].update(vs)
             return features
 
         inner_bb.__name__ = scope
         return inner_bb
-    elif scope.startswith("function"):
-        # like `function=0x401000`
+    elif scope.startswith(("function", "token")):
+        # like `function=0x401000` or `token=0x6000001`
         va = int(scope.partition("=")[2], 0x10)
 
         def inner_function(extractor):
-            f = get_function(extractor, va)
-            features = extract_function_features(extractor, f)
+            if scope.startswith("token"):
+                fh = get_function_by_token(extractor, va)
+            else:
+                fh = get_function(extractor, va)
+            features = extract_function_features(extractor, fh)
             for k, vs in extract_global_features(extractor).items():
                 features[k].update(vs)
             return features
@@ -418,6 +533,12 @@ FEATURE_PRESENCE_TESTS = sorted(
         ("mimikatz", "function=0x40105D", capa.features.insn.Mnemonic("xor"), True),
         ("mimikatz", "function=0x40105D", capa.features.insn.Mnemonic("in"), False),
         ("mimikatz", "function=0x40105D", capa.features.insn.Mnemonic("out"), False),
+        # insn/operand.number
+        ("mimikatz", "function=0x40105D,bb=0x401073", capa.features.insn.OperandNumber(1, 0xFF), True),
+        ("mimikatz", "function=0x40105D,bb=0x401073", capa.features.insn.OperandNumber(0, 0xFF), False),
+        # insn/operand.offset
+        ("mimikatz", "function=0x40105D,bb=0x4010B0", capa.features.insn.OperandOffset(0, 4), True),
+        ("mimikatz", "function=0x40105D,bb=0x4010B0", capa.features.insn.OperandOffset(1, 4), False),
         # insn/number
         ("mimikatz", "function=0x40105D", capa.features.insn.Number(0xFF), True),
         ("mimikatz", "function=0x40105D", capa.features.insn.Number(0x3136B0), True),
@@ -425,10 +546,6 @@ FEATURE_PRESENCE_TESTS = sorted(
         # insn/number: stack adjustments
         ("mimikatz", "function=0x40105D", capa.features.insn.Number(0xC), False),
         ("mimikatz", "function=0x40105D", capa.features.insn.Number(0x10), False),
-        # insn/number: bitness flavors
-        ("mimikatz", "function=0x40105D", capa.features.insn.Number(0xFF), True),
-        ("mimikatz", "function=0x40105D", capa.features.insn.Number(0xFF, bitness=BITNESS_X32), True),
-        ("mimikatz", "function=0x40105D", capa.features.insn.Number(0xFF, bitness=BITNESS_X64), False),
         # insn/number: negative
         ("mimikatz", "function=0x401553", capa.features.insn.Number(0xFFFFFFFF), True),
         ("mimikatz", "function=0x43e543", capa.features.insn.Number(0xFFFFFFF0), True),
@@ -444,10 +561,30 @@ FEATURE_PRESENCE_TESTS = sorted(
         # insn/offset: negative
         ("mimikatz", "function=0x4011FB", capa.features.insn.Offset(-0x1), True),
         ("mimikatz", "function=0x4011FB", capa.features.insn.Offset(-0x2), True),
-        # insn/offset: bitness flavors
-        ("mimikatz", "function=0x40105D", capa.features.insn.Offset(0x0), True),
-        ("mimikatz", "function=0x40105D", capa.features.insn.Offset(0x0, bitness=BITNESS_X32), True),
-        ("mimikatz", "function=0x40105D", capa.features.insn.Offset(0x0, bitness=BITNESS_X64), False),
+        #
+        # insn/offset from mnemonic: add
+        #
+        # should not be considered, too big for an offset:
+        #    .text:00401D85 81 C1 00 00 00 80       add     ecx, 80000000h
+        ("mimikatz", "function=0x401D64,bb=0x401D73,insn=0x401D85", capa.features.insn.Offset(0x80000000), False),
+        # should not be considered, relative to stack:
+        #    .text:00401CF6 83 C4 10                add     esp, 10h
+        ("mimikatz", "function=0x401CC7,bb=0x401CDE,insn=0x401CF6", capa.features.insn.Offset(0x10), False),
+        # yes, this is also a offset (imagine eax is a pointer):
+        #    .text:0040223C 83 C0 04                add     eax, 4
+        ("mimikatz", "function=0x402203,bb=0x402221,insn=0x40223C", capa.features.insn.Offset(0x4), True),
+        #
+        # insn/number from mnemonic: lea
+        #
+        # should not be considered, lea operand invalid encoding
+        #    .text:00471EE6 8D 1C 81                lea     ebx, [ecx+eax*4]
+        ("mimikatz", "function=0x471EAB,bb=0x471ED8,insn=0x471EE6", capa.features.insn.Number(0x4), False),
+        # should not be considered, lea operand invalid encoding
+        #    .text:004717B1 8D 4C 31 D0             lea     ecx, [ecx+esi-30h]
+        ("mimikatz", "function=0x47153B,bb=0x4717AB,insn=0x4717B1", capa.features.insn.Number(-0x30), False),
+        # yes, this is also a number (imagine edx is zero):
+        #    .text:004018C0 8D 4B 02                lea     ecx, [ebx+2]
+        ("mimikatz", "function=0x401873,bb=0x4018B2,insn=0x4018C0", capa.features.insn.Number(0x2), True),
         # insn/api
         ("mimikatz", "function=0x403BAC", capa.features.insn.API("advapi32.CryptAcquireContextW"), True),
         ("mimikatz", "function=0x403BAC", capa.features.insn.API("advapi32.CryptAcquireContext"), True),
@@ -577,6 +714,161 @@ FEATURE_PRESENCE_TESTS = sorted(
     key=lambda t: (t[0], t[1]),
 )
 
+FEATURE_PRESENCE_TESTS_DOTNET = sorted(
+    [
+        ("b9f5b", "file", Arch(ARCH_I386), True),
+        ("b9f5b", "file", Arch(ARCH_AMD64), False),
+        ("mixed-mode-64", "file", Arch(ARCH_AMD64), True),
+        ("mixed-mode-64", "file", Arch(ARCH_I386), False),
+        ("mixed-mode-64", "file", capa.features.common.Characteristic("mixed mode"), True),
+        ("hello-world", "file", capa.features.common.Characteristic("mixed mode"), False),
+        ("b9f5b", "file", OS(OS_ANY), True),
+        ("b9f5b", "file", Format(FORMAT_DOTNET), True),
+        ("hello-world", "file", capa.features.file.FunctionName("HelloWorld::Main"), True),
+        ("hello-world", "file", capa.features.file.FunctionName("HelloWorld::ctor"), True),
+        ("hello-world", "file", capa.features.file.FunctionName("HelloWorld::cctor"), False),
+        ("hello-world", "file", capa.features.common.String("Hello World!"), True),
+        ("hello-world", "file", capa.features.common.Class("HelloWorld"), True),
+        ("hello-world", "file", capa.features.common.Class("System.Console"), True),
+        ("hello-world", "file", capa.features.common.Namespace("System.Diagnostics"), True),
+        ("hello-world", "function=0x250", capa.features.common.String("Hello World!"), True),
+        ("hello-world", "function=0x250, bb=0x250, insn=0x252", capa.features.common.String("Hello World!"), True),
+        ("hello-world", "function=0x250, bb=0x250, insn=0x257", capa.features.common.Class("System.Console"), True),
+        ("hello-world", "function=0x250, bb=0x250, insn=0x257", capa.features.common.Namespace("System"), True),
+        ("hello-world", "function=0x250", capa.features.insn.API("System.Console::WriteLine"), True),
+        ("hello-world", "file", capa.features.file.Import("System.Console::WriteLine"), True),
+        ("_1c444", "file", capa.features.common.String(r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"), True),
+        ("_1c444", "file", capa.features.common.String("get_IsAlive"), True),
+        ("_1c444", "file", capa.features.file.Import("gdi32.CreateCompatibleBitmap"), True),
+        ("_1c444", "file", capa.features.file.Import("CreateCompatibleBitmap"), True),
+        ("_1c444", "file", capa.features.file.Import("gdi32::CreateCompatibleBitmap"), False),
+        ("_1c444", "function=0x1F68", capa.features.insn.API("GetWindowDC"), True),
+        ("_1c444", "function=0x1F68", capa.features.insn.API("user32.GetWindowDC"), True),
+        ("_1c444", "function=0x1F68", capa.features.insn.Number(0xCC0020), True),
+        ("_1c444", "function=0x1F68", capa.features.insn.Number(0x0), True),
+        ("_1c444", "function=0x1F68", capa.features.insn.Number(0x1), False),
+        (
+            "_1c444",
+            "function=0x1F59, bb=0x1F59, insn=0x1F5B",
+            capa.features.common.Characteristic("unmanaged call"),
+            True,
+        ),
+        ("_1c444", "function=0x2544", capa.features.common.Characteristic("unmanaged call"), False),
+        # same as above but using token instead of function
+        ("_1c444", "token=0x6000088", capa.features.common.Characteristic("unmanaged call"), False),
+        (
+            "_1c444",
+            "function=0x1F68, bb=0x1F68, insn=0x1FF9",
+            capa.features.insn.API("System.Drawing.Image::FromHbitmap"),
+            True,
+        ),
+        ("_1c444", "function=0x1F68, bb=0x1F68, insn=0x1FF9", capa.features.insn.API("FromHbitmap"), False),
+        (
+            "_1c444",
+            "token=0x600002B",
+            capa.features.insn.Property("System.IO.FileInfo::Length", access=FeatureAccess.READ),
+            True,
+        ),  # MemberRef method
+        (
+            "_1c444",
+            "token=0x600002B",
+            capa.features.insn.Property("System.IO.FileInfo::Length"),
+            True,
+        ),  # MemberRef method
+        (
+            "_1c444",
+            "token=0x6000081",
+            capa.features.insn.API("System.Diagnostics.Process::Start"),
+            True,
+        ),  # MemberRef method
+        (
+            "_1c444",
+            "token=0x6000081",
+            capa.features.insn.Property(
+                "System.Diagnostics.ProcessStartInfo::UseShellExecute", access=FeatureAccess.WRITE
+            ),  # MemberRef method
+            True,
+        ),
+        (
+            "_1c444",
+            "token=0x6000081",
+            capa.features.insn.Property(
+                "System.Diagnostics.ProcessStartInfo::WorkingDirectory", access=FeatureAccess.WRITE
+            ),  # MemberRef method
+            True,
+        ),
+        (
+            "_1c444",
+            "token=0x6000081",
+            capa.features.insn.Property(
+                "System.Diagnostics.ProcessStartInfo::FileName", access=FeatureAccess.WRITE
+            ),  # MemberRef method
+            True,
+        ),
+        (
+            "_1c444",
+            "token=0x6000087",
+            capa.features.insn.Property("Sockets.MySocket::reConnectionDelay", access=FeatureAccess.WRITE),  # Field
+            True,
+        ),
+        (
+            "_1c444",
+            "token=0x600008A",
+            capa.features.insn.Property("Sockets.MySocket::isConnected", access=FeatureAccess.WRITE),  # Field
+            True,
+        ),
+        (
+            "_1c444",
+            "token=0x600008A",
+            capa.features.insn.Property("Sockets.MySocket::onConnected", access=FeatureAccess.READ),  # Field
+            True,
+        ),
+        (
+            "_0953c",
+            "token=0x6000004",
+            capa.features.insn.Property("System.Diagnostics.Debugger::IsAttached", access=FeatureAccess.READ),
+            True,
+        ),  # MemberRef method
+        (
+            "_692f",
+            "token=0x6000006",
+            capa.features.insn.Property(
+                "System.Management.Automation.PowerShell::Streams", access=FeatureAccess.READ
+            ),  # MemberRef method
+            False,
+        ),
+        (
+            "_039a6",
+            "token=0x6000007",
+            capa.features.insn.API("System.Reflection.Assembly::Load"),
+            True,
+        ),
+        (
+            "_039a6",
+            "token=0x600001D",
+            capa.features.insn.Property("StagelessHollow.Arac::Marka", access=FeatureAccess.READ),  # MethodDef method
+            True,
+        ),
+        (
+            "_039a6",
+            "token=0x600001C",
+            capa.features.insn.Property("StagelessHollow.Arac::Marka", access=FeatureAccess.READ),  # MethodDef method
+            False,
+        ),
+        (
+            "_039a6",
+            "token=0x6000023",
+            capa.features.insn.Property(
+                "System.Runtime.CompilerServices.AsyncTaskMethodBuilder::Task", access=FeatureAccess.READ
+            ),  # MemberRef method
+            False,
+        ),
+    ],
+    # order tests by (file, item)
+    # so that our LRU cache is most effective.
+    key=lambda t: (t[0], t[1]),
+)
+
 FEATURE_PRESENCE_TESTS_IDA = [
     # file/imports
     # IDA can recover more names of APIs imported by ordinal
@@ -590,6 +882,9 @@ FEATURE_COUNT_TESTS = [
     ("mimikatz", "function=0x4556E5", capa.features.common.Characteristic("calls to"), 0),
     ("mimikatz", "function=0x40B1F1", capa.features.common.Characteristic("calls to"), 3),
 ]
+
+
+FEATURE_COUNT_TESTS_DOTNET = []  # type: ignore
 
 
 def do_test_feature_presence(get_extractor, sample, scope, feature, expected):
@@ -689,3 +984,38 @@ def al_khaser_x86_extractor():
 @pytest.fixture
 def pingtaest_extractor():
     return get_extractor(get_data_path_by_name("pingtaest"))
+
+
+@pytest.fixture
+def b9f5b_dotnetfile_extractor():
+    return get_dotnetfile_extractor(get_data_path_by_name("b9f5b"))
+
+
+@pytest.fixture
+def mixed_mode_64_dotnetfile_extractor():
+    return get_dotnetfile_extractor(get_data_path_by_name("mixed-mode-64"))
+
+
+@pytest.fixture
+def hello_world_dotnetfile_extractor():
+    return get_dnfile_extractor(get_data_path_by_name("hello-world"))
+
+
+@pytest.fixture
+def _1c444_dotnetfile_extractor():
+    return get_dnfile_extractor(get_data_path_by_name("_1c444"))
+
+
+@pytest.fixture
+def _692f_dotnetfile_extractor():
+    return get_dnfile_extractor(get_data_path_by_name("_692f"))
+
+
+@pytest.fixture
+def _0953c_dotnetfile_extractor():
+    return get_dnfile_extractor(get_data_path_by_name("_0953c"))
+
+
+@pytest.fixture
+def _039a6_dotnetfile_extractor():
+    return get_dnfile_extractor(get_data_path_by_name("_039a6"))

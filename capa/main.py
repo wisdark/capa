@@ -17,6 +17,7 @@ import os.path
 import argparse
 import datetime
 import textwrap
+import warnings
 import itertools
 import contextlib
 import collections
@@ -41,18 +42,38 @@ import capa.render.vverbose
 import capa.features.extractors
 import capa.features.extractors.common
 import capa.features.extractors.pefile
+import capa.features.extractors.dnfile_
 import capa.features.extractors.elffile
+import capa.features.extractors.dotnetfile
+import capa.features.extractors.base_extractor
 from capa.rules import Rule, Scope, RuleSet
 from capa.engine import FeatureSet, MatchResults
-from capa.helpers import get_file_taste
-from capa.features.extractors.base_extractor import FunctionHandle, FeatureExtractor
+from capa.helpers import (
+    get_format,
+    get_file_taste,
+    get_auto_format,
+    log_unsupported_os_error,
+    log_unsupported_arch_error,
+    log_unsupported_format_error,
+)
+from capa.exceptions import UnsupportedOSError, UnsupportedArchError, UnsupportedFormatError, UnsupportedRuntimeError
+from capa.features.common import (
+    FORMAT_PE,
+    FORMAT_ELF,
+    FORMAT_AUTO,
+    FORMAT_SC32,
+    FORMAT_SC64,
+    FORMAT_DOTNET,
+    FORMAT_FREEZE,
+)
+from capa.features.address import NO_ADDRESS
+from capa.features.extractors.base_extractor import BBHandle, InsnHandle, FunctionHandle, FeatureExtractor
 
 RULES_PATH_DEFAULT_STRING = "(embedded rules)"
 SIGNATURES_PATH_DEFAULT_STRING = "(embedded signatures)"
 BACKEND_VIV = "vivisect"
 BACKEND_SMDA = "smda"
-EXTENSIONS_SHELLCODE_32 = ("sc32", "raw32")
-EXTENSIONS_SHELLCODE_64 = ("sc64", "raw64")
+BACKEND_DOTNET = "dotnet"
 
 E_MISSING_RULES = -10
 E_MISSING_FILE = -11
@@ -83,47 +104,112 @@ def set_vivisect_log_level(level):
     logging.getLogger("vtrace").setLevel(level)
     logging.getLogger("envi").setLevel(level)
     logging.getLogger("envi.codeflow").setLevel(level)
+    logging.getLogger("Elf").setLevel(level)
 
 
-def find_function_capabilities(ruleset: RuleSet, extractor: FeatureExtractor, f: FunctionHandle):
-    # contains features from:
-    #  - insns
-    #  - function
+def find_instruction_capabilities(
+    ruleset: RuleSet, extractor: FeatureExtractor, f: FunctionHandle, bb: BBHandle, insn: InsnHandle
+) -> Tuple[FeatureSet, MatchResults]:
+    """
+    find matches for the given rules for the given instruction.
+
+    returns: tuple containing (features for instruction, match results for instruction)
+    """
+    # all features found for the instruction.
+    features = collections.defaultdict(set)  # type: FeatureSet
+
+    for feature, addr in itertools.chain(
+        extractor.extract_insn_features(f, bb, insn), extractor.extract_global_features()
+    ):
+        features[feature].add(addr)
+
+    # matches found at this instruction.
+    _, matches = ruleset.match(Scope.INSTRUCTION, features, insn.address)
+
+    for rule_name, res in matches.items():
+        rule = ruleset[rule_name]
+        for addr, _ in res:
+            capa.engine.index_rule_matches(features, rule, [addr])
+
+    return features, matches
+
+
+def find_basic_block_capabilities(
+    ruleset: RuleSet, extractor: FeatureExtractor, f: FunctionHandle, bb: BBHandle
+) -> Tuple[FeatureSet, MatchResults, MatchResults]:
+    """
+    find matches for the given rules within the given basic block.
+
+    returns: tuple containing (features for basic block, match results for basic block, match results for instructions)
+    """
+    # all features found within this basic block,
+    # includes features found within instructions.
+    features = collections.defaultdict(set)  # type: FeatureSet
+
+    # matches found at the instruction scope.
+    # might be found at different instructions, thats ok.
+    insn_matches = collections.defaultdict(list)  # type: MatchResults
+
+    for insn in extractor.get_instructions(f, bb):
+        ifeatures, imatches = find_instruction_capabilities(ruleset, extractor, f, bb, insn)
+        for feature, vas in ifeatures.items():
+            features[feature].update(vas)
+
+        for rule_name, res in imatches.items():
+            insn_matches[rule_name].extend(res)
+
+    for feature, va in itertools.chain(
+        extractor.extract_basic_block_features(f, bb), extractor.extract_global_features()
+    ):
+        features[feature].add(va)
+
+    # matches found within this basic block.
+    _, matches = ruleset.match(Scope.BASIC_BLOCK, features, bb.address)
+
+    for rule_name, res in matches.items():
+        rule = ruleset[rule_name]
+        for va, _ in res:
+            capa.engine.index_rule_matches(features, rule, [va])
+
+    return features, matches, insn_matches
+
+
+def find_code_capabilities(
+    ruleset: RuleSet, extractor: FeatureExtractor, fh: FunctionHandle
+) -> Tuple[MatchResults, MatchResults, MatchResults, int]:
+    """
+    find matches for the given rules within the given function.
+
+    returns: tuple containing (match results for function, match results for basic blocks, match results for instructions, number of features)
+    """
+    # all features found within this function,
+    # includes features found within basic blocks (and instructions).
     function_features = collections.defaultdict(set)  # type: FeatureSet
+
+    # matches found at the basic block scope.
+    # might be found at different basic blocks, thats ok.
     bb_matches = collections.defaultdict(list)  # type: MatchResults
 
-    for feature, va in itertools.chain(extractor.extract_function_features(f), extractor.extract_global_features()):
+    # matches found at the instruction scope.
+    # might be found at different instructions, thats ok.
+    insn_matches = collections.defaultdict(list)  # type: MatchResults
+
+    for bb in extractor.get_basic_blocks(fh):
+        features, bmatches, imatches = find_basic_block_capabilities(ruleset, extractor, fh, bb)
+        for feature, vas in features.items():
+            function_features[feature].update(vas)
+
+        for rule_name, res in bmatches.items():
+            bb_matches[rule_name].extend(res)
+
+        for rule_name, res in imatches.items():
+            insn_matches[rule_name].extend(res)
+
+    for feature, va in itertools.chain(extractor.extract_function_features(fh), extractor.extract_global_features()):
         function_features[feature].add(va)
 
-    for bb in extractor.get_basic_blocks(f):
-        # contains features from:
-        #  - insns
-        #  - basic blocks
-        bb_features = collections.defaultdict(set)
-
-        for feature, va in itertools.chain(
-            extractor.extract_basic_block_features(f, bb), extractor.extract_global_features()
-        ):
-            bb_features[feature].add(va)
-            function_features[feature].add(va)
-
-        for insn in extractor.get_instructions(f, bb):
-            for feature, va in itertools.chain(
-                extractor.extract_insn_features(f, bb, insn), extractor.extract_global_features()
-            ):
-                bb_features[feature].add(va)
-                function_features[feature].add(va)
-
-        _, matches = ruleset.match(Scope.BASIC_BLOCK, bb_features, int(bb))
-
-        for rule_name, res in matches.items():
-            bb_matches[rule_name].extend(res)
-            rule = ruleset[rule_name]
-            for va, _ in res:
-                capa.engine.index_rule_matches(function_features, rule, [va])
-
-    _, function_matches = ruleset.match(Scope.FUNCTION, function_features, int(f))
-    return function_matches, bb_matches, len(function_features)
+    _, function_matches = ruleset.match(Scope.FUNCTION, function_features, fh.address)
+    return function_matches, bb_matches, insn_matches, len(function_features)
 
 
 def find_file_capabilities(ruleset: RuleSet, extractor: FeatureExtractor, function_features: FeatureSet):
@@ -143,13 +229,14 @@ def find_file_capabilities(ruleset: RuleSet, extractor: FeatureExtractor, functi
 
     file_features.update(function_features)
 
-    _, matches = ruleset.match(Scope.FILE, file_features, 0x0)
+    _, matches = ruleset.match(Scope.FILE, file_features, NO_ADDRESS)
     return matches, len(file_features)
 
 
 def find_capabilities(ruleset: RuleSet, extractor: FeatureExtractor, disable_progress=None) -> Tuple[MatchResults, Any]:
     all_function_matches = collections.defaultdict(list)  # type: MatchResults
     all_bb_matches = collections.defaultdict(list)  # type: MatchResults
+    all_insn_matches = collections.defaultdict(list)  # type: MatchResults
 
     meta = {
         "feature_counts": {
@@ -170,31 +257,33 @@ def find_capabilities(ruleset: RuleSet, extractor: FeatureExtractor, disable_pro
 
     pb = pbar(functions, desc="matching", unit=" functions", postfix="skipped 0 library functions")
     for f in pb:
-        function_address = int(f)
-
-        if extractor.is_library_function(function_address):
-            function_name = extractor.get_function_name(function_address)
-            logger.debug("skipping library function 0x%x (%s)", function_address, function_name)
-            meta["library_functions"][function_address] = function_name
+        if extractor.is_library_function(f.address):
+            function_name = extractor.get_function_name(f.address)
+            logger.debug("skipping library function 0x%x (%s)", f.address, function_name)
+            meta["library_functions"][f.address] = function_name
             n_libs = len(meta["library_functions"])
             percentage = 100 * (n_libs / n_funcs)
             if isinstance(pb, tqdm.tqdm):
                 pb.set_postfix_str("skipped %d library functions (%d%%)" % (n_libs, percentage))
             continue
 
-        function_matches, bb_matches, feature_count = find_function_capabilities(ruleset, extractor, f)
-        meta["feature_counts"]["functions"][function_address] = feature_count
-        logger.debug("analyzed function 0x%x and extracted %d features", function_address, feature_count)
+        function_matches, bb_matches, insn_matches, feature_count = find_code_capabilities(ruleset, extractor, f)
+        meta["feature_counts"]["functions"][f.address] = feature_count
+        logger.debug("analyzed function 0x%x and extracted %d features", f.address, feature_count)
 
         for rule_name, res in function_matches.items():
             all_function_matches[rule_name].extend(res)
         for rule_name, res in bb_matches.items():
             all_bb_matches[rule_name].extend(res)
+        for rule_name, res in insn_matches.items():
+            all_insn_matches[rule_name].extend(res)
 
-    # collection of features that captures the rule matches within function and BB scopes.
+    # collection of features that captures the rule matches within function, BB, and instruction scopes.
     # mapping from feature (matched rule) to set of addresses at which it matched.
     function_and_lower_features: FeatureSet = collections.defaultdict(set)
-    for rule_name, results in itertools.chain(all_function_matches.items(), all_bb_matches.items()):
+    for rule_name, results in itertools.chain(
+        all_function_matches.items(), all_bb_matches.items(), all_insn_matches.items()
+    ):
         locations = set(map(lambda p: p[0], results))
         rule = ruleset[rule_name]
         capa.engine.index_rule_matches(function_and_lower_features, rule, locations)
@@ -208,6 +297,7 @@ def find_capabilities(ruleset: RuleSet, extractor: FeatureExtractor, disable_pro
             # each rule exists in exactly one scope,
             # so there won't be any overlap among these following MatchResults,
             # and we can merge the dictionaries naively.
+            all_insn_matches.items(),
             all_bb_matches.items(),
             all_function_matches.items(),
             all_file_matches.items(),
@@ -217,6 +307,7 @@ def find_capabilities(ruleset: RuleSet, extractor: FeatureExtractor, disable_pro
     return matches, meta
 
 
+# TODO move all to helpers?
 def has_rule_with_namespace(rules, capabilities, rule_cat):
     for rule_name in capabilities.keys():
         if rules.rules[rule_name].meta.get("namespace", "").startswith(rule_cat):
@@ -262,17 +353,6 @@ def is_supported_format(sample: str) -> bool:
         taste = f.read(0x100)
 
     return len(list(capa.features.extractors.common.extract_format(taste))) == 1
-
-
-def get_format(sample: str) -> str:
-    with open(sample, "rb") as f:
-        buf = f.read()
-
-    for feature, _ in capa.features.extractors.common.extract_format(buf):
-        assert isinstance(feature.value, str)
-        return feature.value
-
-    return "unknown"
 
 
 def is_supported_arch(sample: str) -> bool:
@@ -363,19 +443,7 @@ def get_default_signatures() -> List[str]:
     return ret
 
 
-class UnsupportedFormatError(ValueError):
-    pass
-
-
-class UnsupportedArchError(ValueError):
-    pass
-
-
-class UnsupportedOSError(ValueError):
-    pass
-
-
-def get_workspace(path, format, sigpaths):
+def get_workspace(path, format_, sigpaths):
     """
     load the program at the given path into a vivisect workspace using the given format.
     also apply the given FLIRT signatures.
@@ -395,21 +463,22 @@ def get_workspace(path, format, sigpaths):
     import viv_utils
 
     logger.debug("generating vivisect workspace for: %s", path)
-    if format == "auto":
+    # TODO should not be auto at this point, anymore
+    if format_ == FORMAT_AUTO:
         if not is_supported_format(path):
             raise UnsupportedFormatError()
 
         # don't analyze, so that we can add our Flirt function analyzer first.
         vw = viv_utils.getWorkspace(path, analyze=False, should_save=False)
-    elif format in {"pe", "elf"}:
+    elif format_ in {FORMAT_PE, FORMAT_ELF}:
         vw = viv_utils.getWorkspace(path, analyze=False, should_save=False)
-    elif format == "sc32":
+    elif format_ == FORMAT_SC32:
         # these are not analyzed nor saved.
         vw = viv_utils.getShellcodeWorkspaceFromFile(path, arch="i386", analyze=False)
-    elif format == "sc64":
+    elif format_ == FORMAT_SC64:
         vw = viv_utils.getShellcodeWorkspaceFromFile(path, arch="amd64", analyze=False)
     else:
-        raise ValueError("unexpected format: " + format)
+        raise ValueError("unexpected format: " + format_)
 
     viv_utils.flirt.register_flirt_signature_analyzers(vw, sigpaths)
 
@@ -419,12 +488,9 @@ def get_workspace(path, format, sigpaths):
     return vw
 
 
-class UnsupportedRuntimeError(RuntimeError):
-    pass
-
-
+# TODO get_extractors -> List[FeatureExtractor]?
 def get_extractor(
-    path: str, format: str, backend: str, sigpaths: List[str], should_save_workspace=False, disable_progress=False
+    path: str, format_: str, backend: str, sigpaths: List[str], should_save_workspace=False, disable_progress=False
 ) -> FeatureExtractor:
     """
     raises:
@@ -432,7 +498,7 @@ def get_extractor(
       UnsupportedArchError
       UnsupportedOSError
     """
-    if format not in ("sc32", "sc64"):
+    if format_ not in (FORMAT_SC32, FORMAT_SC64):
         if not is_supported_format(path):
             raise UnsupportedFormatError()
 
@@ -442,12 +508,19 @@ def get_extractor(
         if not is_supported_os(path):
             raise UnsupportedOSError()
 
+    if format_ == FORMAT_DOTNET:
+        import capa.features.extractors.dnfile.extractor
+
+        return capa.features.extractors.dnfile.extractor.DnfileFeatureExtractor(path)
+
     if backend == "smda":
         from smda.SmdaConfig import SmdaConfig
         from smda.Disassembler import Disassembler
 
         import capa.features.extractors.smda.extractor
 
+        logger.warning("Deprecation warning: v4.0 will be the last capa version to support the SMDA backend.")
+        warnings.warn("v4.0 will be the last capa version to support the SMDA backend.", DeprecationWarning)
         smda_report = None
         with halo.Halo(text="analyzing program", spinner="simpleDots", stream=sys.stderr, enabled=not disable_progress):
             config = SmdaConfig()
@@ -460,7 +533,7 @@ def get_extractor(
         import capa.features.extractors.viv.extractor
 
         with halo.Halo(text="analyzing program", spinner="simpleDots", stream=sys.stderr, enabled=not disable_progress):
-            vw = get_workspace(path, format, sigpaths)
+            vw = get_workspace(path, format_, sigpaths)
 
             if should_save_workspace:
                 logger.debug("saving workspace")
@@ -473,6 +546,22 @@ def get_extractor(
                 logger.debug("CAPA_SAVE_WORKSPACE unset, not saving workspace")
 
         return capa.features.extractors.viv.extractor.VivisectFeatureExtractor(vw, path)
+
+
+def get_file_extractors(sample: str, format_: str) -> List[FeatureExtractor]:
+    file_extractors: List[FeatureExtractor] = list()
+
+    if format_ == capa.features.extractors.common.FORMAT_PE:
+        file_extractors.append(capa.features.extractors.pefile.PefileFeatureExtractor(sample))
+
+        dnfile_extractor = capa.features.extractors.dnfile_.DnfileFeatureExtractor(sample)
+        if dnfile_extractor.is_dotnet_file():
+            file_extractors.append(dnfile_extractor)
+
+    elif format_ == capa.features.extractors.common.FORMAT_ELF:
+        file_extractors.append(capa.features.extractors.elffile.ElfFeatureExtractor(sample))
+
+    return file_extractors
 
 
 def is_nursery_rule_path(path: str) -> bool:
@@ -488,32 +577,33 @@ def is_nursery_rule_path(path: str) -> bool:
     return "nursery" in path
 
 
-def get_rules(rule_path: str, disable_progress=False) -> List[Rule]:
-    if not os.path.exists(rule_path):
-        raise IOError("rule path %s does not exist or cannot be accessed" % rule_path)
+def get_rules(rule_paths: List[str], disable_progress=False) -> List[Rule]:
+    rule_file_paths = []
+    for rule_path in rule_paths:
+        if not os.path.exists(rule_path):
+            raise IOError("rule path %s does not exist or cannot be accessed" % rule_path)
 
-    rule_paths = []
-    if os.path.isfile(rule_path):
-        rule_paths.append(rule_path)
-    elif os.path.isdir(rule_path):
-        logger.debug("reading rules from directory %s", rule_path)
-        for root, dirs, files in os.walk(rule_path):
-            if ".github" in root:
-                # the .github directory contains CI config in capa-rules
-                # this includes some .yml files
-                # these are not rules
-                continue
-
-            for file in files:
-                if not file.endswith(".yml"):
-                    if not (file.startswith(".git") or file.endswith((".git", ".md", ".txt"))):
-                        # expect to see .git* files, readme.md, format.md, and maybe a .git directory
-                        # other things maybe are rules, but are mis-named.
-                        logger.warning("skipping non-.yml file: %s", file)
+        if os.path.isfile(rule_path):
+            rule_file_paths.append(rule_path)
+        elif os.path.isdir(rule_path):
+            logger.debug("reading rules from directory %s", rule_path)
+            for root, dirs, files in os.walk(rule_path):
+                if ".git" in root:
+                    # the .github directory contains CI config in capa-rules
+                    # this includes some .yml files
+                    # these are not rules
+                    # additionally, .git has files that are not .yml and generate the warning
+                    # skip those too
                     continue
-
-                rule_path = os.path.join(root, file)
-                rule_paths.append(rule_path)
+                for file in files:
+                    if not file.endswith(".yml"):
+                        if not (file.startswith(".git") or file.endswith((".git", ".md", ".txt"))):
+                            # expect to see .git* files, readme.md, format.md, and maybe a .git directory
+                            # other things maybe are rules, but are mis-named.
+                            logger.warning("skipping non-.yml file: %s", file)
+                        continue
+                    rule_path = os.path.join(root, file)
+                    rule_file_paths.append(rule_path)
 
     rules = []  # type: List[Rule]
 
@@ -523,14 +613,14 @@ def get_rules(rule_path: str, disable_progress=False) -> List[Rule]:
         # to disable progress completely
         pbar = lambda s, *args, **kwargs: s
 
-    for rule_path in pbar(list(rule_paths), desc="loading ", unit=" rules"):
+    for rule_file_path in pbar(list(rule_file_paths), desc="loading ", unit=" rules"):
         try:
-            rule = capa.rules.Rule.from_yaml_file(rule_path)
+            rule = capa.rules.Rule.from_yaml_file(rule_file_path)
         except capa.rules.InvalidRule:
             raise
         else:
-            rule.meta["capa/path"] = rule_path
-            if is_nursery_rule_path(rule_path):
+            rule.meta["capa/path"] = rule_file_path
+            if is_nursery_rule_path(rule_file_path):
                 rule.meta["capa/nursery"] = True
 
             rules.append(rule)
@@ -567,7 +657,12 @@ def get_signatures(sigs_path):
     return paths
 
 
-def collect_metadata(argv, sample_path, rules_path, extractor):
+def collect_metadata(
+    argv: List[str],
+    sample_path: str,
+    rules_path: List[str],
+    extractor: capa.features.extractors.base_extractor.FeatureExtractor,
+):
     md5 = hashlib.md5()
     sha1 = hashlib.sha1()
     sha256 = hashlib.sha256()
@@ -579,10 +674,10 @@ def collect_metadata(argv, sample_path, rules_path, extractor):
     sha1.update(buf)
     sha256.update(buf)
 
-    if rules_path != RULES_PATH_DEFAULT_STRING:
-        rules_path = os.path.abspath(os.path.normpath(rules_path))
+    if rules_path != [RULES_PATH_DEFAULT_STRING]:
+        rules_path = [os.path.abspath(os.path.normpath(r)) for r in rules_path]
 
-    format = get_format(sample_path)
+    format_ = get_format(sample_path)
     arch = get_arch(sample_path)
     os_ = get_os(sample_path)
 
@@ -597,7 +692,7 @@ def collect_metadata(argv, sample_path, rules_path, extractor):
             "path": os.path.normpath(sample_path),
         },
         "analysis": {
-            "format": format,
+            "format": format_,
             "arch": arch,
             "os": os_,
             "extractor": extractor.__class__.__name__,
@@ -625,10 +720,10 @@ def compute_layout(rules, extractor, capabilities):
     functions_by_bb = {}
     bbs_by_function = {}
     for f in extractor.get_functions():
-        bbs_by_function[int(f)] = []
+        bbs_by_function[f.address] = []
         for bb in extractor.get_basic_blocks(f):
-            functions_by_bb[int(bb)] = int(f)
-            bbs_by_function[int(f)].append(int(bb))
+            functions_by_bb[bb.address] = f.address
+            bbs_by_function[f.address].append(bb.address)
 
     matched_bbs = set()
     for rule_name, matches in capabilities.items():
@@ -712,19 +807,20 @@ def install_common_args(parser, wanted=None):
 
     if "format" in wanted:
         formats = [
-            ("auto", "(default) detect file type automatically"),
-            ("pe", "Windows PE file"),
-            ("elf", "Executable and Linkable Format"),
-            ("sc32", "32-bit shellcode"),
-            ("sc64", "64-bit shellcode"),
-            ("freeze", "features previously frozen by capa"),
+            (FORMAT_AUTO, "(default) detect file type automatically"),
+            (FORMAT_PE, "Windows PE file"),
+            (FORMAT_DOTNET, ".NET PE file"),
+            (FORMAT_ELF, "Executable and Linkable Format"),
+            (FORMAT_SC32, "32-bit shellcode"),
+            (FORMAT_SC64, "64-bit shellcode"),
+            (FORMAT_FREEZE, "features previously frozen by capa"),
         ]
         format_help = ", ".join(["%s: %s" % (f[0], f[1]) for f in formats])
         parser.add_argument(
             "-f",
             "--format",
             choices=[f[0] for f in formats],
-            default="auto",
+            default=FORMAT_AUTO,
             help="select sample format, %s" % format_help,
         )
 
@@ -743,7 +839,8 @@ def install_common_args(parser, wanted=None):
             "-r",
             "--rules",
             type=str,
-            default=RULES_PATH_DEFAULT_STRING,
+            default=[RULES_PATH_DEFAULT_STRING],
+            action="append",
             help="path to rule file or directory, use embedded rules by default",
         )
 
@@ -784,7 +881,7 @@ def handle_common_args(args):
     # disable vivisect-related logging, it's verbose and not relevant for capa users
     set_vivisect_log_level(logging.CRITICAL)
 
-    # Since Python 3.8 cp65001 is an alias to utf_8, but not for Pyhton < 3.8
+    # Since Python 3.8 cp65001 is an alias to utf_8, but not for Python < 3.8
     # TODO: remove this code when only supporting Python 3.8+
     # https://stackoverflow.com/a/3259271/87207
     import codecs
@@ -805,7 +902,9 @@ def handle_common_args(args):
         raise RuntimeError("unexpected --color value: " + args.color)
 
     if hasattr(args, "rules"):
-        if args.rules == RULES_PATH_DEFAULT_STRING:
+        rules_paths: List[str] = []
+
+        if args.rules == [RULES_PATH_DEFAULT_STRING]:
             logger.debug("-" * 80)
             logger.debug(" Using default embedded rules.")
             logger.debug(" To provide your own rules, use the form `capa.exe -r ./path/to/rules/  /path/to/mal.exe`.")
@@ -813,9 +912,9 @@ def handle_common_args(args):
             logger.debug("     https://github.com/mandiant/capa-rules")
             logger.debug("-" * 80)
 
-            rules_path = os.path.join(get_default_root(), "rules")
+            default_rule_path = os.path.join(get_default_root(), "rules")
 
-            if not os.path.exists(rules_path):
+            if not os.path.exists(default_rule_path):
                 # when a users installs capa via pip,
                 # this pulls down just the source code - not the default rules.
                 # i'm not sure the default rules should even be written to the library directory,
@@ -823,11 +922,18 @@ def handle_common_args(args):
                 logger.error("default embedded rules not found! (maybe you installed capa as a library?)")
                 logger.error("provide your own rule set via the `-r` option.")
                 return E_MISSING_RULES
-        else:
-            rules_path = args.rules
-            logger.debug("using rules path: %s", rules_path)
 
-        args.rules = rules_path
+            rules_paths.append(default_rule_path)
+        else:
+            rules_paths = args.rules
+
+            if RULES_PATH_DEFAULT_STRING in rules_paths:
+                rules_paths.remove(RULES_PATH_DEFAULT_STRING)
+
+            for rule_path in rules_paths:
+                logger.debug("using rules path: %s", rule_path)
+
+        args.rules = rules_paths
 
     if hasattr(args, "signatures"):
         if args.signatures == SIGNATURES_PATH_DEFAULT_STRING:
@@ -847,8 +953,8 @@ def handle_common_args(args):
 
 
 def main(argv=None):
-    if sys.version_info < (3, 6):
-        raise UnsupportedRuntimeError("This version of capa can only be used with Python 3.6+")
+    if sys.version_info < (3, 7):
+        raise UnsupportedRuntimeError("This version of capa can only be used with Python 3.7+")
 
     if argv is None:
         argv = sys.argv[1:]
@@ -893,12 +999,20 @@ def main(argv=None):
         return ret
 
     try:
-        taste = get_file_taste(args.sample)
+        _ = get_file_taste(args.sample)
     except IOError as e:
         # per our research there's not a programmatic way to render the IOError with non-ASCII filename unless we
         # handle the IOError separately and reach into the args
         logger.error("%s", e.args[0])
         return E_MISSING_FILE
+
+    format_ = args.format
+    if format_ == FORMAT_AUTO:
+        try:
+            format_ = get_auto_format(args.sample)
+        except UnsupportedFormatError:
+            log_unsupported_format_error()
+            return E_INVALID_FILE_TYPE
 
     try:
         rules = get_rules(args.rules, disable_progress=args.quiet)
@@ -909,7 +1023,7 @@ def main(argv=None):
             # during the load of the RuleSet, we extract subscope statements into their own rules
             # that are subsequently `match`ed upon. this inflates the total rule count.
             # so, filter out the subscope rules when reporting total number of loaded rules.
-            len([i for i in filter(lambda r: "capa/subscope-rule" not in r.meta, rules.rules.values())]),
+            len([i for i in filter(lambda r: not r.is_subscope_rule(), rules.rules.values())]),
         )
         if args.tag:
             rules = rules.filter_rules_by_meta(args.tag)
@@ -919,28 +1033,37 @@ def main(argv=None):
                 logger.debug(" %d. %s", i, r)
     except (IOError, capa.rules.InvalidRule, capa.rules.InvalidRuleSet) as e:
         logger.error("%s", str(e))
+        logger.error(
+            "Please ensure you're using the rules that correspond to your major version of capa (%s)",
+            capa.version.get_major_version(),
+        )
+        logger.error(
+            "You can check out these rules with the following command:\n    %s",
+            capa.version.get_rules_checkout_command(),
+        )
+        logger.error(
+            "Or, for more details, see the rule set documentation here: %s",
+            "https://github.com/mandiant/capa/blob/master/doc/rules.md",
+        )
         return E_INVALID_RULE
 
-    file_extractor = None
-    if args.format == "pe" or (args.format == "auto" and taste.startswith(b"MZ")):
-        # these pefile and elffile file feature extractors are pretty light weight: they don't do any code analysis.
-        # so we can fairly quickly determine if the given file has "pure" file-scope rules
-        # that indicate a limitation (like "file is packed based on section names")
-        # and avoid doing a full code analysis on difficult/impossible binaries.
-        try:
-            file_extractor = capa.features.extractors.pefile.PefileFeatureExtractor(args.sample)
-        except PEFormatError as e:
-            logger.error("Input file '%s' is not a valid PE file: %s", args.sample, str(e))
-            return E_CORRUPT_FILE
+    # file feature extractors are pretty lightweight: they don't do any code analysis.
+    # so we can fairly quickly determine if the given file has "pure" file-scope rules
+    # that indicate a limitation (like "file is packed based on section names")
+    # and avoid doing a full code analysis on difficult/impossible binaries.
+    #
+    # this pass can inspect multiple file extractors, e.g., dotnet and pe to identify
+    # various limitations
+    try:
+        file_extractors = get_file_extractors(args.sample, format_)
+    except PEFormatError as e:
+        logger.error("Input file '%s' is not a valid PE file: %s", args.sample, str(e))
+        return E_CORRUPT_FILE
+    except (ELFError, OverflowError) as e:
+        logger.error("Input file '%s' is not a valid ELF file: %s", args.sample, str(e))
+        return E_CORRUPT_FILE
 
-    elif args.format == "elf" or (args.format == "auto" and taste.startswith(b"\x7fELF")):
-        try:
-            file_extractor = capa.features.extractors.elffile.ElfFeatureExtractor(args.sample)
-        except (ELFError, OverflowError) as e:
-            logger.error("Input file '%s' is not a valid ELF file: %s", args.sample, str(e))
-            return E_CORRUPT_FILE
-
-    if file_extractor:
+    for file_extractor in file_extractors:
         try:
             pure_file_capabilities, _ = find_file_capabilities(rules, file_extractor, {})
         except PEFormatError as e:
@@ -949,6 +1072,9 @@ def main(argv=None):
         except (ELFError, OverflowError) as e:
             logger.error("Input file '%s' is not a valid ELF file: %s", args.sample, str(e))
             return E_CORRUPT_FILE
+
+        if isinstance(file_extractor, capa.features.extractors.dnfile_.DnfileFeatureExtractor):
+            format_ = FORMAT_DOTNET
 
         # file limitations that rely on non-file scope won't be detected here.
         # nor on FunctionName features, because pefile doesn't support this.
@@ -959,58 +1085,34 @@ def main(argv=None):
                 logger.debug("file limitation short circuit, won't analyze fully.")
                 return E_FILE_LIMITATION
 
-    try:
-        if args.format == "pe" or (args.format == "auto" and taste.startswith(b"MZ")):
-            sig_paths = get_signatures(args.signatures)
-        else:
-            sig_paths = []
-            logger.debug("skipping library code matching: only have PE signatures")
-    except (IOError) as e:
-        logger.error("%s", str(e))
-        return E_INVALID_SIG
-
-    if (args.format == "freeze") or (args.format == "auto" and capa.features.freeze.is_freeze(taste)):
-        format = "freeze"
+    if format_ == FORMAT_FREEZE:
         with open(args.sample, "rb") as f:
             extractor = capa.features.freeze.load(f.read())
     else:
-        format = args.format
-        if format == "auto" and args.sample.endswith(EXTENSIONS_SHELLCODE_32):
-            format = "sc32"
-        elif format == "auto" and args.sample.endswith(EXTENSIONS_SHELLCODE_64):
-            format = "sc64"
+        try:
+            if format_ == FORMAT_PE:
+                sig_paths = get_signatures(args.signatures)
+            else:
+                sig_paths = []
+                logger.debug("skipping library code matching: only have native PE signatures")
+        except IOError as e:
+            logger.error("%s", str(e))
+            return E_INVALID_SIG
 
         should_save_workspace = os.environ.get("CAPA_SAVE_WORKSPACE") not in ("0", "no", "NO", "n", None)
 
         try:
             extractor = get_extractor(
-                args.sample, format, args.backend, sig_paths, should_save_workspace, disable_progress=args.quiet
+                args.sample, format_, args.backend, sig_paths, should_save_workspace, disable_progress=args.quiet
             )
         except UnsupportedFormatError:
-            logger.error("-" * 80)
-            logger.error(" Input file does not appear to be a PE or ELF file.")
-            logger.error(" ")
-            logger.error(
-                " capa currently only supports analyzing PE and ELF files (or shellcode, when using --format sc32|sc64)."
-            )
-            logger.error(" If you don't know the input file type, you can try using the `file` utility to guess it.")
-            logger.error("-" * 80)
+            log_unsupported_format_error()
             return E_INVALID_FILE_TYPE
         except UnsupportedArchError:
-            logger.error("-" * 80)
-            logger.error(" Input file does not appear to target a supported architecture.")
-            logger.error(" ")
-            logger.error(" capa currently only supports analyzing x86 (32- and 64-bit).")
-            logger.error("-" * 80)
+            log_unsupported_arch_error()
             return E_INVALID_FILE_ARCH
         except UnsupportedOSError:
-            logger.error("-" * 80)
-            logger.error(" Input file does not appear to target a supported OS.")
-            logger.error(" ")
-            logger.error(
-                " capa currently only supports analyzing executables for some operating systems (including Windows and Linux)."
-            )
-            logger.error("-" * 80)
+            log_unsupported_os_error()
             return E_INVALID_FILE_OS
 
     meta = collect_metadata(argv, args.sample, args.rules, extractor)
@@ -1067,7 +1169,7 @@ def ida_main():
     rules = get_rules(rules_path)
     rules = capa.rules.RuleSet(rules)
 
-    meta = capa.ida.helpers.collect_metadata()
+    meta = capa.ida.helpers.collect_metadata([rules_path])
 
     capabilities, counts = find_capabilities(rules, capa.features.extractors.ida.extractor.IdaFeatureExtractor())
     meta["analysis"].update(counts)

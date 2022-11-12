@@ -29,8 +29,7 @@ def is_aw_function(symbol: str) -> bool:
     if symbol[-1] not in ("A", "W"):
         return False
 
-    # second to last character should be lowercase letter
-    return "a" <= symbol[-2] <= "z" or "0" <= symbol[-2] <= "9"
+    return True
 
 
 def is_ordinal(symbol: str) -> bool:
@@ -52,6 +51,9 @@ def generate_symbols(dll: str, symbol: str) -> Iterator[str]:
       - CreateFileA
       - CreateFile
     """
+    # normalize dll name
+    dll = dll.lower()
+
     # kernel32.CreateFileA
     yield "%s.%s" % (dll, symbol)
 

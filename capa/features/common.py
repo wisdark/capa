@@ -7,10 +7,11 @@
 # See the License for the specific language governing permissions and limitations under the License.
 
 import re
+import abc
 import codecs
 import logging
 import collections
-from typing import TYPE_CHECKING, Set, Dict, List, Union
+from typing import TYPE_CHECKING, Set, Dict, List, Union, Optional, Sequence
 
 if TYPE_CHECKING:
     # circular import, otherwise
@@ -19,12 +20,21 @@ if TYPE_CHECKING:
 import capa.perf
 import capa.features
 import capa.features.extractors.elf
+from capa.features.address import Address
 
 logger = logging.getLogger(__name__)
 MAX_BYTES_FEATURE_SIZE = 0x100
 
 # thunks may be chained so we specify a delta to control the depth to which these chains are explored
 THUNK_CHAIN_DEPTH_DELTA = 5
+
+
+class FeatureAccess:
+    READ = "read"
+    WRITE = "write"
+
+
+VALID_FEATURE_ACCESS = (FeatureAccess.READ, FeatureAccess.WRITE)
 
 
 def bytes_to_str(b: bytes) -> str:
@@ -69,20 +79,13 @@ class Result:
         success: bool,
         statement: Union["capa.engine.Statement", "Feature"],
         children: List["Result"],
-        locations=None,
+        locations: Optional[Set[Address]] = None,
     ):
-        """
-        args:
-          success (bool)
-          statement (capa.engine.Statement or capa.features.Feature)
-          children (list[Result])
-          locations (iterable[VA])
-        """
         super(Result, self).__init__()
         self.success = success
         self.statement = statement
         self.children = children
-        self.locations = locations if locations is not None else ()
+        self.locations = locations if locations is not None else set()
 
     def __eq__(self, other):
         if isinstance(other, bool):
@@ -96,78 +99,68 @@ class Result:
         return self.success
 
 
-class Feature:
-    def __init__(self, value: Union[str, int, bytes], bitness=None, description=None):
+class Feature(abc.ABC):
+    def __init__(
+        self,
+        value: Union[str, int, float, bytes],
+        description: Optional[str] = None,
+    ):
         """
         Args:
           value (any): the value of the feature, such as the number or string.
-          bitness (str): one of the VALID_BITNESS values, or None.
-            When None, then the feature applies to any bitness.
-            Modifies the feature name from `feature` to `feature/bitness`, like `offset/x32`.
           description (str): a human-readable description that explains the feature value.
         """
         super(Feature, self).__init__()
 
-        if bitness is not None:
-            if bitness not in VALID_BITNESS:
-                raise ValueError("bitness '%s' must be one of %s" % (bitness, VALID_BITNESS))
-            self.name = self.__class__.__name__.lower() + "/" + bitness
-        else:
-            self.name = self.__class__.__name__.lower()
-
+        self.name = self.__class__.__name__.lower()
         self.value = value
-        self.bitness = bitness
         self.description = description
 
     def __hash__(self):
-        return hash((self.name, self.value, self.bitness))
+        return hash((self.name, self.value))
 
     def __eq__(self, other):
-        return self.name == other.name and self.value == other.value and self.bitness == other.bitness
+        return self.name == other.name and self.value == other.value
+
+    def __lt__(self, other):
+        # TODO: this is a huge hack!
+        import capa.features.freeze.features
+
+        return (
+            capa.features.freeze.features.feature_from_capa(self).json()
+            < capa.features.freeze.features.feature_from_capa(other).json()
+        )
+
+    def get_name_str(self) -> str:
+        """
+        render the name of this feature, for use by `__str__` and friends.
+        subclasses should override to customize the rendering.
+        """
+        return self.name
 
     def get_value_str(self) -> str:
         """
         render the value of this feature, for use by `__str__` and friends.
         subclasses should override to customize the rendering.
-
-        Returns: any
         """
         return str(self.value)
 
     def __str__(self):
         if self.value is not None:
             if self.description:
-                return "%s(%s = %s)" % (self.name, self.get_value_str(), self.description)
+                return "%s(%s = %s)" % (self.get_name_str(), self.get_value_str(), self.description)
             else:
-                return "%s(%s)" % (self.name, self.get_value_str())
+                return "%s(%s)" % (self.get_name_str(), self.get_value_str())
         else:
-            return "%s" % self.name
+            return "%s" % self.get_name_str()
 
     def __repr__(self):
         return str(self)
 
-    def evaluate(self, ctx: Dict["Feature", Set[int]], **kwargs) -> Result:
+    def evaluate(self, ctx: Dict["Feature", Set[Address]], **kwargs) -> Result:
         capa.perf.counters["evaluate.feature"] += 1
         capa.perf.counters["evaluate.feature." + self.name] += 1
-        return Result(self in ctx, self, [], locations=ctx.get(self, []))
-
-    def freeze_serialize(self):
-        if self.bitness is not None:
-            return (self.__class__.__name__, [self.value, {"bitness": self.bitness}])
-        else:
-            return (self.__class__.__name__, [self.value])
-
-    @classmethod
-    def freeze_deserialize(cls, args):
-        # as you can see below in code,
-        # if the last argument is a dictionary,
-        # consider it to be kwargs passed to the feature constructor.
-        if len(args) == 1:
-            return cls(*args)
-        elif isinstance(args[-1], dict):
-            kwargs = args[-1]
-            args = args[:-1]
-            return cls(*args, **kwargs)
+        return Result(self in ctx, self, [], locations=ctx.get(self, set()))
 
 
 class MatchedRule(Feature):
@@ -178,13 +171,22 @@ class MatchedRule(Feature):
 
 class Characteristic(Feature):
     def __init__(self, value: str, description=None):
-
         super(Characteristic, self).__init__(value, description=description)
 
 
 class String(Feature):
     def __init__(self, value: str, description=None):
         super(String, self).__init__(value, description=description)
+
+
+class Class(Feature):
+    def __init__(self, value: str, description=None):
+        super(Class, self).__init__(value, description=description)
+
+
+class Namespace(Feature):
+    def __init__(self, value: str, description=None):
+        super(Namespace, self).__init__(value, description=description)
 
 
 class Substring(String):
@@ -231,7 +233,7 @@ class Substring(String):
             # instead, return a new instance that has a reference to both the substring and the matched values.
             return Result(True, _MatchedSubstring(self, matches), [], locations=locations)
         else:
-            return Result(False, _MatchedSubstring(self, None), [])
+            return Result(False, _MatchedSubstring(self, {}), [])
 
     def __str__(self):
         return "substring(%s)" % self.value
@@ -245,11 +247,11 @@ class _MatchedSubstring(Substring):
     note: this type should only ever be constructed by `Substring.evaluate()`. it is not part of the public API.
     """
 
-    def __init__(self, substring: Substring, matches):
+    def __init__(self, substring: Substring, matches: Dict[str, Set[Address]]):
         """
         args:
-          substring (Substring): the substring feature that matches.
-          match (Dict[string, List[int]]|None): mapping from matching string to its locations.
+          substring: the substring feature that matches.
+          match: mapping from matching string to its locations.
         """
         super(_MatchedSubstring, self).__init__(str(substring.value), description=substring.description)
         # we want this to collide with the name of `Substring` above,
@@ -328,7 +330,7 @@ class Regex(String):
             # see #262.
             return Result(True, _MatchedRegex(self, matches), [], locations=locations)
         else:
-            return Result(False, _MatchedRegex(self, None), [])
+            return Result(False, _MatchedRegex(self, {}), [])
 
     def __str__(self):
         return "regex(string =~ %s)" % self.value
@@ -342,11 +344,11 @@ class _MatchedRegex(Regex):
     note: this type should only ever be constructed by `Regex.evaluate()`. it is not part of the public API.
     """
 
-    def __init__(self, regex: Regex, matches):
+    def __init__(self, regex: Regex, matches: Dict[str, Set[Address]]):
         """
         args:
-          regex (Regex): the regex feature that matches.
-          match (Dict[string, List[int]]|None): mapping from matching string to its locations.
+          regex: the regex feature that matches.
+          matches: mapping from matching string to its locations.
         """
         super(_MatchedRegex, self).__init__(str(regex.value), description=regex.description)
         # we want this to collide with the name of `Regex` above,
@@ -390,25 +392,13 @@ class Bytes(Feature):
     def get_value_str(self):
         return hex_string(bytes_to_str(self.value))
 
-    def freeze_serialize(self):
-        return (self.__class__.__name__, [bytes_to_str(self.value).upper()])
-
-    @classmethod
-    def freeze_deserialize(cls, args):
-        return cls(*[codecs.decode(x, "hex") for x in args])
-
-
-# identifiers for supported bitness names that tweak a feature
-# for example, offset/x32
-BITNESS_X32 = "x32"
-BITNESS_X64 = "x64"
-VALID_BITNESS = (BITNESS_X32, BITNESS_X64)
-
 
 # other candidates here: https://docs.microsoft.com/en-us/windows/win32/debug/pe-format#machine-types
 ARCH_I386 = "i386"
 ARCH_AMD64 = "amd64"
-VALID_ARCH = (ARCH_I386, ARCH_AMD64)
+# dotnet
+ARCH_ANY = "any"
+VALID_ARCH = (ARCH_I386, ARCH_AMD64, ARCH_ANY)
 
 
 class Arch(Feature):
@@ -420,8 +410,10 @@ class Arch(Feature):
 OS_WINDOWS = "windows"
 OS_LINUX = "linux"
 OS_MACOS = "macos"
+# dotnet
+OS_ANY = "any"
 VALID_OS = {os.value for os in capa.features.extractors.elf.OS}
-VALID_OS.update({OS_WINDOWS, OS_LINUX, OS_MACOS})
+VALID_OS.update({OS_WINDOWS, OS_LINUX, OS_MACOS, OS_ANY})
 
 
 class OS(Feature):
@@ -432,7 +424,14 @@ class OS(Feature):
 
 FORMAT_PE = "pe"
 FORMAT_ELF = "elf"
-VALID_FORMAT = (FORMAT_PE, FORMAT_ELF)
+FORMAT_DOTNET = "dotnet"
+VALID_FORMAT = (FORMAT_PE, FORMAT_ELF, FORMAT_DOTNET)
+# internal only, not to be used in rules
+FORMAT_AUTO = "auto"
+FORMAT_SC32 = "sc32"
+FORMAT_SC64 = "sc64"
+FORMAT_FREEZE = "freeze"
+FORMAT_UNKNOWN = "unknown"
 
 
 class Format(Feature):

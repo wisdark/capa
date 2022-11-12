@@ -34,6 +34,7 @@ from pathlib import Path
 from dataclasses import field, dataclass
 
 import tqdm
+import pydantic
 import termcolor
 import ruamel.yaml
 import tqdm.contrib.logging
@@ -41,10 +42,11 @@ import tqdm.contrib.logging
 import capa.main
 import capa.rules
 import capa.engine
+import capa.helpers
 import capa.features.insn
-import capa.features.common
 from capa.rules import Rule, RuleSet
-from capa.features.common import Feature
+from capa.features.common import FORMAT_PE, FORMAT_DOTNET, String, Feature, Substring
+from capa.render.result_document import RuleMetadata
 
 logger = logging.getLogger("lint")
 
@@ -105,6 +107,7 @@ class FilenameDoesntMatchRuleName(Lint):
     def check_rule(self, ctx: Context, rule: Rule):
         expected = rule.name
         expected = expected.lower()
+        expected = expected.replace(".net", "dotnet")
         expected = expected.replace(" ", "-")
         expected = expected.replace("(", "")
         expected = expected.replace(")", "")
@@ -161,18 +164,18 @@ class MissingScope(Lint):
 
 class InvalidScope(Lint):
     name = "invalid scope"
-    recommendation = "Use only file, function, or basic block rule scopes"
+    recommendation = "Use only file, function, basic block, or instruction rule scopes"
 
     def check_rule(self, ctx: Context, rule: Rule):
-        return rule.meta.get("scope") not in ("file", "function", "basic block")
+        return rule.meta.get("scope") not in ("file", "function", "basic block", "instruction")
 
 
-class MissingAuthor(Lint):
-    name = "missing author"
-    recommendation = "Add meta.author so that users know who to contact with questions"
+class MissingAuthors(Lint):
+    name = "missing authors"
+    recommendation = "Add meta.authors so that users know who to contact with questions"
 
     def check_rule(self, ctx: Context, rule: Rule):
-        return "author" not in rule.meta
+        return "authors" not in rule.meta
 
 
 class MissingExamples(Lint):
@@ -222,6 +225,19 @@ class ExampleFileDNE(Lint):
         return not found
 
 
+class IncorrectValueType(Lint):
+    name = "incorrect value type"
+    recommendation = "Change value type"
+
+    def check_rule(self, ctx: Context, rule: Rule):
+        try:
+            _ = RuleMetadata.from_capa(rule)
+        except pydantic.ValidationError as e:
+            self.recommendation = str(e).strip()
+            return True
+        return False
+
+
 class InvalidAttckOrMbcTechnique(Lint):
     name = "att&ck/mbc entry is malformed or does not exist"
     recommendation = """
@@ -247,7 +263,7 @@ class InvalidAttckOrMbcTechnique(Lint):
             self.enabled_frameworks = []
 
         # This regex matches the format defined in the recommendation attribute
-        self.reg = re.compile("^([\w\s-]+)::(.+) \[([A-Za-z0-9.]+)\]$")
+        self.reg = re.compile(r"^([\w\s-]+)::(.+) \[([A-Za-z0-9.]+)\]$")
 
     def _entry_check(self, framework, category, entry, eid):
         if category not in self.data[framework].keys():
@@ -286,17 +302,19 @@ def get_sample_capabilities(ctx: Context, path: Path) -> Set[str]:
         logger.debug("found cached results: %s: %d capabilities", nice_path, len(ctx.capabilities_by_sample[path]))
         return ctx.capabilities_by_sample[path]
 
-    if nice_path.endswith(capa.main.EXTENSIONS_SHELLCODE_32):
-        format = "sc32"
-    elif nice_path.endswith(capa.main.EXTENSIONS_SHELLCODE_64):
-        format = "sc64"
+    if nice_path.endswith(capa.helpers.EXTENSIONS_SHELLCODE_32):
+        format_ = "sc32"
+    elif nice_path.endswith(capa.helpers.EXTENSIONS_SHELLCODE_64):
+        format_ = "sc64"
     else:
-        format = "auto"
+        format_ = "auto"
+        if not nice_path.endswith(capa.helpers.EXTENSIONS_ELF):
+            dnfile_extractor = capa.features.extractors.dnfile_.DnfileFeatureExtractor(nice_path)
+            if dnfile_extractor.is_dotnet_file():
+                format_ = FORMAT_DOTNET
 
     logger.debug("analyzing sample: %s", nice_path)
-    extractor = capa.main.get_extractor(
-        nice_path, format, capa.main.BACKEND_VIV, DEFAULT_SIGNATURES, False, disable_progress=True
-    )
+    extractor = capa.main.get_extractor(nice_path, format_, "", DEFAULT_SIGNATURES, False, disable_progress=True)
 
     capabilities, _ = capa.main.find_capabilities(ctx.rules, extractor, disable_progress=True)
     # mypy doesn't seem to be happy with the MatchResults type alias & set(...keys())?
@@ -489,7 +507,7 @@ class FeatureStringTooShort(Lint):
 
     def check_features(self, ctx: Context, features: List[Feature]):
         for feature in features:
-            if isinstance(feature, (capa.features.common.String, capa.features.common.Substring)):
+            if isinstance(feature, (String, Substring)):
                 assert isinstance(feature.value, str)
                 if len(feature.value) < 4:
                     self.recommendation = self.recommendation.format(feature.value)
@@ -696,7 +714,7 @@ def lint_scope(ctx: Context, rule: Rule):
 META_LINTS = (
     MissingNamespace(),
     NamespaceDoesntMatchRulePath(),
-    MissingAuthor(),
+    MissingAuthors(),
     MissingExamples(),
     MissingExampleOffset(),
     ExampleFileDNE(),
@@ -704,6 +722,7 @@ META_LINTS = (
     LibRuleNotInLibDirectory(),
     LibRuleHasNamespace(),
     InvalidAttckOrMbcTechnique(),
+    IncorrectValueType(),
 )
 
 
@@ -800,15 +819,12 @@ def lint_rule(ctx: Context, rule: Rule):
         # this is by far the most common reason to be in the nursery,
         # and ends up just producing a lot of noise.
         if not (is_nursery_rule(rule) and len(violations) == 1 and violations[0].name == "missing examples"):
-            category = rule.meta.get("rule-category")
-
             print("")
             print(
-                "%s%s %s"
+                "%s%s"
                 % (
                     "    (nursery) " if is_nursery_rule(rule) else "",
                     rule.name,
-                    ("(%s)" % category) if category else "",
                 )
             )
 
@@ -904,7 +920,7 @@ def lint(ctx: Context):
     with tqdm.contrib.logging.tqdm_logging_redirect(ctx.rules.rules.items(), unit="rule") as pbar:
         with redirecting_print_to_tqdm():
             for name, rule in pbar:
-                if rule.meta.get("capa/subscope-rule", False):
+                if rule.is_subscope_rule():
                     continue
 
                 pbar.set_description(width("linting rule: %s" % (name), 48))
@@ -962,7 +978,7 @@ def main(argv=None):
 
     parser = argparse.ArgumentParser(description="Lint capa rules.")
     capa.main.install_common_args(parser, wanted={"tag"})
-    parser.add_argument("rules", type=str, help="Path to rules")
+    parser.add_argument("rules", type=str, action="append", help="Path to rules")
     parser.add_argument("--samples", type=str, default=samples_path, help="Path to samples")
     parser.add_argument(
         "--thorough",
@@ -983,8 +999,9 @@ def main(argv=None):
 
     try:
         rules = capa.main.get_rules(args.rules, disable_progress=True)
+        rule_count = len(rules)
         rules = capa.rules.RuleSet(rules)
-        logger.info("successfully loaded %s rules", len(rules))
+        logger.info("successfully loaded %s rules", rule_count)
         if args.tag:
             rules = rules.filter_rules_by_meta(args.tag)
             logger.debug("selected %s rules", len(rules))

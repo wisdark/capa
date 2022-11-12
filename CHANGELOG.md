@@ -3,22 +3,174 @@
 ## master (unreleased)
 
 ### New Features
+- verify rule metadata format on load #1160 @mr-tz
+- extract property features from .NET PE files #1168 @anushkavirgaonkar
+- emit features for .NET newobj instruction #1186 @mike-hunhoff
 
 ### Breaking Changes
 
-### New Rules (0)
+### New Rules (29)
 
+- collection/use-dotnet-library-sharpclipboard @johnk3r
+- data-manipulation/encryption/aes/use-dotnet-library-encryptdecryptutils @johnk3r
+- data-manipulation/json/use-dotnet-library-newtonsoftjson @johnk3r
+- data-manipulation/svg/use-dotnet-library-sharpvectors @johnk3r
+- executable/resource/embed-dependencies-as-resources-using-fodycostura @johnk3r @mr-tz
+- communication/ftp/send/send-file-using-ftp michael.hunhof@mandiant.com anushka.virgaonkar@mandiant.com
+- nursery/extract-zip-archive anushka.virgaonkar@mandiant.com
+- nursery/allocate-unmanaged-memory-in-dotnet michael.hunhoff@mandiant.com
+- nursery/check-file-extension-in-dotnet michael.hunhoff@mandiant.com
+- nursery/decode-data-using-base64-in-dotnet michael.hunhoff@mandiant.com
+- nursery/deserialize-json-in-dotnet michael.hunhoff@mandiant.com
+- nursery/find-data-using-regex-in-dotnet michael.hunhoff@mandiant.com
+- nursery/generate-random-filename-in-dotnet michael.hunhoff@mandiant.com
+- nursery/get-os-version-in-dotnet michael.hunhoff@mandiant.com
+- nursery/load-xml-in-dotnet michael.hunhoff@mandiant.com
+- nursery/manipulate-unmanaged-memory-in-dotnet michael.hunhoff@mandiant.com
+- nursery/save-image-in-dotnet michael.hunhoff@mandiant.com
+- nursery/send-email-in-dotnet michael.hunhoff@mandiant.com
+- nursery/serialize-json-in-dotnet michael.hunhoff@mandiant.com
+- nursery/set-http-user-agent-in-dotnet michael.hunhoff@mandiant.com
+- nursery/compile-csharp-in-dotnet michael.hunhoff@mandiant.com
+- nursery/compile-visual-basic-in-dotnet michael.hunhoff@mandiant.com
+- nursery/compress-data-using-gzip-in-dotnet michael.hunhoff@mandiant.com
+- nursery/execute-sqlite-statement-in-dotnet michael.hunhoff@mandiant.com
+- nursery/execute-via-asynchronous-task-in-dotnet michael.hunhoff@mandiant.com
+- nursery/execute-via-timer-in-dotnet michael.hunhoff@mandiant.com
+- nursery/execute-wmi-query-in-dotnet michael.hunhoff@mandiant.com
+- nursery/manipulate-network-credentials-in-dotnet michael.hunhoff@mandiant.com
 -
 
 ### Bug Fixes
+- render: convert feature attributes to aliased dictionary for vverbose #1152 @mike-hunhoff
+- decouple Token dependency / extractor and features #1139 @mr-tz
+- update pydantic model to guarantee type coercion #1176 @mike-hunhoff
+- do not overwrite version in version.py during PyInstaller build #1169 @mr-tz
 
 ### capa explorer IDA Pro plugin
+- fix: display instruction items #1154 @mr-tz
 
 ### Development
 
 ### Raw diffs
-- [capa v3.2.0...master](https://github.com/mandiant/capa/compare/v3.2.0...master)
-- [capa-rules v3.2.0...master](https://github.com/mandiant/capa-rules/compare/v3.2.0...master)
+- [capa v4.0.1...master](https://github.com/mandiant/capa/compare/v4.0.1...master)
+- [capa-rules v4.0.1...master](https://github.com/mandiant/capa-rules/compare/v4.0.1...master)
+
+
+## v4.0.1 (2022-08-15)
+Some rules contained invalid metadata fields that caused an error when rendering rule hits. We've updated all rules and enhanced the rule linter to catch such issues.
+
+### New Rules (1)
+
+- anti-analysis/obfuscation/obfuscated-with-vs-obfuscation jakub.jozwiak@mandiant.com
+
+
+### Bug Fixes
+- linter: use pydantic to validate rule metadata #1141 @mike-hunhoff
+- build binaries using PyInstaller no longer overwrites functions in version.py #1136 @mr-tz
+
+### Raw diffs
+- [capa v4.0.0...v4.0.1](https://github.com/mandiant/capa/compare/v4.0.0...v4.0.1)
+- [capa-rules v4.0.0...v4.0.1](https://github.com/mandiant/capa-rules/compare/v4.0.0...v4.0.1)
+
+## v4.0.0 (2022-08-10)
+Version 4 adds support for analyzing .NET executables. capa will autodetect .NET modules, or you can explicitly invoke the new feature extractor via `--format dotnet`. We've also extended the rule syntax for .NET features including `namespace` and `class`.
+
+Additionally, new `instruction` scope and `operand` features enable users to create more explicit rules. These features are not backwards compatible. We removed the previously used `/x32` and `/x64` flavors of number and operand features.
+
+We updated 49 existing rules and added 22 new rules leveraging these new features and characteristics to detect capabilities seen in .NET malware.
+
+More breaking changes include updates to the JSON results document, freeze file format schema (now format version v2), and the internal handling of addresses.
+
+Thanks for all the support, especially to @htnhan, @jtothej, @sara-rn, @anushkavirgaonkar, and @_re_fox!
+
+*Deprecation warning: v4.0 will be the last capa version to support the SMDA backend.*
+
+### New Features
+
+ - add new scope "instruction" for matching mnemonics and operands #767 @williballenthin
+ - add new feature "operand[{0, 1, 2}].number" for matching instruction operand immediate values #767 @williballenthin
+ - add new feature "operand[{0, 1, 2}].offset" for matching instruction operand offsets #767 @williballenthin
+ - extract additional offset/number features in certain circumstances #320 @williballenthin
+ - add detection and basic feature extraction for dotnet #987 @mr-tz, @mike-hunhoff, @williballenthin
+ - add file string extraction for dotnet files #1012 @mike-hunhoff
+ - add file function-name extraction for dotnet files #1015 @mike-hunhoff
+ - add unmanaged call characteristic for dotnet files #1023 @mike-hunhoff
+ - add mixed mode characteristic feature extraction for dotnet files #1024 @mike-hunhoff
+ - emit class and namespace features for dotnet files #1030 @mike-hunhoff
+ - render: support Addresses that aren't simple integers, like .NET token+offset #981 @williballenthin
+ - document rule tags and branches #1006 @williballenthin, @mr-tz
+
+### Breaking Changes
+
+  - instruction scope and operand feature are new and are not backwards compatible with older versions of capa
+  - Python 3.7 is now the minimum supported Python version #866 @williballenthin
+  - remove /x32 and /x64 flavors of number and operand features #932 @williballenthin
+  - the tool now accepts multiple paths to rules, and JSON doc updated accordingly @williballenthin
+  - extractors must use handles to identify functions/basic blocks/instructions #981 @williballenthin
+  - the freeze file format schema was updated, including format version bump to v2 #986 @williballenthin
+
+Deprecation notice: as described in [#937](https://github.com/mandiant/capa/issues/937), we plan to remove the SMDA backend for v5. If you rely on this backend, please reach out so we can discuss extending the support for SMDA or transitioning your workflow to use vivisect.
+
+### New Rules (30)
+
+- data-manipulation/encryption/aes/manually-build-aes-constants huynh.t.nhan@gmail.com
+- nursery/get-process-image-filename michael.hunhoff@mandiant.com
+- compiler/v/compiled-with-v jakub.jozwiak@mandiant.com
+- compiler/zig/compiled-with-zig jakub.jozwiak@mandiant.com
+- anti-analysis/packer/huan/packed-with-huan jakub.jozwiak@mandiant.com
+- internal/limitation/file/internal-dotnet-file-limitation william.ballenthin@mandiant.com
+- nursery/get-os-information-via-kuser_shared_data @mr-tz
+- load-code/pe/resolve-function-by-parsing-PE-exports @sara-rn
+- anti-analysis/packer/huan/packed-with-huan jakub.jozwiak@mandiant.com
+- nursery/execute-dotnet-assembly anushka.virgaonkar@mandiant.com
+- nursery/invoke-dotnet-assembly-method anushka.virgaonkar@mandiant.com
+- collection/screenshot/capture-screenshot-via-keybd-event @_re_fox
+- collection/browser/gather-chrome-based-browser-login-information @_re_fox
+- nursery/power-down-monitor michael.hunhoff@mandiant.com
+- nursery/hash-data-using-aphash @_re_fox
+- nursery/hash-data-using-jshash @_re_fox
+- host-interaction/file-system/files/list/enumerate-files-on-windows moritz.raabe@mandiant.com anushka.virgaonkar@mandiant.com
+- nursery/check-clipboard-data anushka.virgaonkar@mandiant.com
+- nursery/clear-clipboard-data anushka.virgaonkar@mandiant.com
+- nursery/compile-dotnet-assembly anushka.virgaonkar@mandiant.com
+- nursery/create-process-via-wmi anushka.virgaonkar@mandiant.com
+- nursery/display-service-notification-message-box anushka.virgaonkar@mandiant.com
+- nursery/find-process-by-name anushka.virgaonkar@mandiant.com
+- nursery/generate-random-numbers-in-dotnet anushka.virgaonkar@mandiant.com
+- nursery/send-keystrokes anushka.virgaonkar@mandiant.com
+- nursery/send-request-in-dotnet anushka.virgaonakr@mandiant.com
+- nursery/terminate-process-by-name-in-dotnet anushka.virgaonkar@mandiant.com
+- nursery/hash-data-using-rshash @_re_fox
+- persistence/authentication-process/act-as-credential-manager-dll jakub.jozwiak@mandiant.com
+- persistence/authentication-process/act-as-password-filter-dll jakub.jozwiak@mandiant.com
+
+### Bug Fixes
+- improve handling _ prefix compile/link artifact #924 @mike-hunhoff
+- better detect OS in ELF samples #988 @williballenthin
+- display number feature zero in vverbose #1097 @mike-hunhoff
+
+### capa explorer IDA Pro plugin
+- improve file format extraction #918 @mike-hunhoff
+- remove decorators added by IDA to ELF imports #919 @mike-hunhoff
+- bug fixes for Address abstraction #1091 @mike-hunhoff
+
+### Development
+
+### Raw diffs
+- [capa v3.2.0...v4.0.0](https://github.com/mandiant/capa/compare/v3.2.0...master)
+- [capa-rules v3.2.0...v4.0.0](https://github.com/mandiant/capa-rules/compare/v3.2.0...master)
+
+## v3.2.1 (2022-06-06)
+This out-of-band release bumps the SMDA dependency version to enable installation on Python 3.10.
+
+### Bug Fixes
+
+- update SMDA dependency @mike-hunhoff #922
+
+### Raw diffs
+- [capa v3.2.0...v3.2.1](https://github.com/mandiant/capa/compare/v3.2.0...v3.2.1)
+- [capa-rules v3.2.0...v3.2.1](https://github.com/mandiant/capa-rules/compare/v3.2.0...v3.2.1)
 
 ## v3.2.0 (2022-03-03)
 This release adds a new characteristic `characteristic: call $+5` enabling users to create more explicit rules. The linter now also validates ATT&CK and MBC categories. Additionally, many dependencies, including the vivisect backend, have been updated.
