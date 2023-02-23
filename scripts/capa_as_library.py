@@ -16,7 +16,7 @@ import capa.features.freeze.features as frzf
 from capa.engine import *
 
 
-# == Render ddictionary helpers
+# == Render dictionary helpers
 def render_meta(doc: rd.ResultDocument, result):
     result["md5"] = doc.meta.sample.md5
     result["sha1"] = doc.meta.sample.sha1
@@ -106,7 +106,7 @@ def render_attack(doc, result):
 
     for tactic, techniques in sorted(tactics.items()):
         inner_rows = []
-        for (technique, subtechnique, id) in sorted(techniques):
+        for technique, subtechnique, id in sorted(techniques):
             if subtechnique is None:
                 inner_rows.append("%s %s" % (technique, id))
             else:
@@ -140,7 +140,7 @@ def render_mbc(doc, result):
 
     for objective, behaviors in sorted(objectives.items()):
         inner_rows = []
-        for (behavior, method, id) in sorted(behaviors):
+        for behavior, method, id in sorted(behaviors):
             if method is None:
                 inner_rows.append("%s [%s]" % (behavior, id))
             else:
@@ -161,7 +161,7 @@ def render_dictionary(doc: rd.ResultDocument) -> Dict[str, Any]:
 # ==== render dictionary helpers
 def capa_details(rules_path, file_path, output_format="dictionary"):
     # load rules from disk
-    rules = capa.rules.RuleSet(capa.main.get_rules([rules_path], disable_progress=True))
+    rules = capa.main.get_rules([rules_path])
 
     # extract features and find capabilities
     extractor = capa.main.get_extractor(file_path, "auto", capa.main.BACKEND_VIV, [], False, disable_progress=True)
@@ -172,7 +172,7 @@ def capa_details(rules_path, file_path, output_format="dictionary"):
     meta["analysis"].update(counts)
     meta["analysis"]["layout"] = capa.main.compute_layout(rules, extractor, capabilities)
 
-    capa_output = False
+    capa_output: Any = False
     if output_format == "dictionary":
         # ...as python dictionary, simplified as textable but in dictionary
         doc = rd.ResultDocument.from_capa(meta, rules, capabilities)

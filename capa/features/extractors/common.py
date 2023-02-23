@@ -9,6 +9,7 @@ import pefile
 import capa.features
 import capa.features.extractors.elf
 import capa.features.extractors.pefile
+import capa.features.extractors.strings
 from capa.features.common import OS, FORMAT_PE, FORMAT_ELF, OS_WINDOWS, FORMAT_FREEZE, Arch, Format, String, Feature
 from capa.features.freeze import is_freeze
 from capa.features.address import NO_ADDRESS, Address, FileOffsetAddress
@@ -63,7 +64,7 @@ def extract_arch(buf) -> Iterator[Tuple[Feature, Address]]:
         #  2. handling a new file format (e.g. macho)
         #
         # for (1) we can't do much - its shellcode and all bets are off.
-        # we could maybe accept a futher CLI argument to specify the arch,
+        # we could maybe accept a further CLI argument to specify the arch,
         # but i think this would be rarely used.
         # rules that rely on arch conditions will fail to match on shellcode.
         #
@@ -91,7 +92,7 @@ def extract_os(buf) -> Iterator[Tuple[Feature, Address]]:
         #  2. handling a new file format (e.g. macho)
         #
         # for (1) we can't do much - its shellcode and all bets are off.
-        # we could maybe accept a futher CLI argument to specify the OS,
+        # we could maybe accept a further CLI argument to specify the OS,
         # but i think this would be rarely used.
         # rules that rely on OS conditions will fail to match on shellcode.
         #

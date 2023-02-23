@@ -64,7 +64,6 @@ unsupported = ["characteristic", "mnemonic", "offset", "subscope", "Range"]
 
 # collect all converted rules to be able to check if we have needed sub rules for match:
 converted_rules = []
-count_incomplete = 0
 
 default_tags = "CAPA "
 
@@ -129,8 +128,7 @@ def convert_capa_number_to_yara_bytes(number):
 
 
 def convert_rule_name(rule_name):
-
-    # yara rule names: "Identifiers must follow the same lexical conventions of the C programming language, they can contain any alphanumeric character and the underscore character, but the first character cannot be a digit. Rule identifiers are case sensitive and cannot exceed 128 characters." so we replace any non-alpanum with _
+    # yara rule names: "Identifiers must follow the same lexical conventions of the C programming language, they can contain any alphanumeric character and the underscore character, but the first character cannot be a digit. Rule identifiers are case sensitive and cannot exceed 128 characters." so we replace any non-alphanum with _
     rule_name = re.sub(r"\W", "_", rule_name)
     rule_name = "capa_" + rule_name
 
@@ -152,7 +150,6 @@ def convert_description(statement):
 
 
 def convert_rule(rule, rulename, cround, depth):
-
     depth += 1
     logger.info("recursion depth: " + str(depth))
 
@@ -284,12 +281,12 @@ def convert_rule(rule, rulename, cround, depth):
             # change capas /xxx/i to yaras /xxx/ nocase, count will be used later to decide appending 'nocase'
             regex, count = re.subn(r"/i$", "/", regex)
 
-            # remove / in the begining and end
+            # remove / in the beginning and end
             regex = regex[1:-1]
 
             # all .* in the regexes of capa look like they should be maximum 100 chars so take 1000 to speed up rules and prevent yara warnings on poor performance
             regex = regex.replace(".*", ".{,1000}")
-            # strange: capa accepts regexes with unsescaped / like - string: /com/exe4j/runtime/exe4jcontroller/i in capa-rules/compiler/exe4j/compiled-with-exe4j.yml, needs a fix for yara:
+            # strange: capa accepts regexes with unescaped / like - string: /com/exe4j/runtime/exe4jcontroller/i in capa-rules/compiler/exe4j/compiled-with-exe4j.yml, needs a fix for yara:
             # would assume that get_value_str() gives the raw string
             regex = re.sub(r"(?<!\\)/", r"\/", regex)
 
@@ -297,7 +294,7 @@ def convert_rule(rule, rulename, cround, depth):
             # /reg(|.exe)/ => /reg(.exe)?/
             regex = re.sub(r"\(\|([^\)]+)\)", r"(\1)?", regex)
 
-            # change begining of line to null byte, e.g. /^open => /\x00open (not word boundary because we're not looking for the begining of a word in a text but usually a function name if there's ^ in a capa rule)
+            # change beginning of line to null byte, e.g. /^open => /\x00open (not word boundary because we're not looking for the beginning of a word in a text but usually a function name if there's ^ in a capa rule)
             regex = re.sub(r"^\^", r"\\x00", regex)
 
             # regex = re.sub(r"^\^", r"\\b", regex)
@@ -378,7 +375,7 @@ def convert_rule(rule, rulename, cround, depth):
 
             if s_type == "Some":
                 cmin = kid.count
-                logger.info("Some type with mininum: " + str(cmin))
+                logger.info("Some type with minimum: " + str(cmin))
 
                 if not cmin:
                     logger.info("this is optional: which means, we can just ignore it")
@@ -483,7 +480,7 @@ def convert_rule(rule, rulename, cround, depth):
 
     elif statement == "Some":
         cmin = rule.count
-        logger.info("Some type with mininum at2: " + str(cmin))
+        logger.info("Some type with minimum at2: " + str(cmin))
 
         if not cmin:
             logger.info("this is optional: which means, we can just ignore it")
@@ -516,7 +513,6 @@ def output_yar(yara):
 
 
 def output_unsupported_capa_rules(yaml, capa_rulename, url, reason):
-
     if reason != "NOLOG":
         if capa_rulename not in unsupported_capa_rules_list:
             logger.info("unsupported: " + capa_rulename + " - reason: " + reason + " - url: " + url)
@@ -537,9 +533,9 @@ def output_unsupported_capa_rules(yaml, capa_rulename, url, reason):
             unsupported_capa_rules_names.write(url.encode("utf-8") + b"\n")
 
 
-def convert_rules(rules, namespaces, cround):
+def convert_rules(rules, namespaces, cround, make_priv):
+    count_incomplete = 0
     for rule in rules.rules.values():
-
         rule_name = convert_rule_name(rule.name)
 
         if rule.is_subscope_rule():
@@ -579,7 +575,6 @@ def convert_rules(rules, namespaces, cround):
                 output_unsupported_capa_rules(rule.to_yaml(), rule.name, url, yara_condition)
             logger.info("Unknown feature at5: " + rule.name)
         else:
-
             yara_meta = ""
             metas = rule.meta
             rule_tags = ""
@@ -623,7 +618,7 @@ def convert_rules(rules, namespaces, cround):
                             value = re.sub(r"^([0-9a-f]{20,64}):0x[0-9a-f]{1,10}$", r"\1", value, flags=re.IGNORECASE)
 
                             # examples in capa can contain the same hash several times with different offset, so check if it's already there:
-                            # (keeping the offset might be interessting for some but breaks yara-ci for checking of the final rules
+                            # (keeping the offset might be interesting for some but breaks yara-ci for checking of the final rules
                             if value not in seen_hashes:
                                 yara_meta += "\t" + meta_name + ' = "' + value + '"\n'
                                 seen_hashes.append(value)
@@ -652,7 +647,6 @@ def convert_rules(rules, namespaces, cround):
                     if meta_name and meta_value:
                         yara_meta += "\t" + meta_name + ' = "' + meta_value + '"\n'
 
-            rule_name_bonus = ""
             if rule_comment:
                 yara_meta += '\tcomment = "' + rule_comment + '"\n'
             yara_meta += '\tdate = "' + today + '"\n'
@@ -662,7 +656,6 @@ def convert_rules(rules, namespaces, cround):
             # check if there's some beef in condition:
             tmp_yc = re.sub(r"(and|or|not)", "", yara_condition)
             if re.search(r"\w", tmp_yc):
-
                 yara = ""
                 if make_priv:
                     yara = "private "
@@ -679,11 +672,12 @@ def convert_rules(rules, namespaces, cround):
                 # TODO: now the rule is finished and could be automatically checked with the capa-testfile(s) named in meta (doing it for all of them using yara-ci upload at the moment)
                 output_yar(yara)
                 converted_rules.append(rule_name)
-                global count_incomplete
                 count_incomplete += incomplete
             else:
                 output_unsupported_capa_rules(rule.to_yaml(), rule.name, url, yara_condition)
                 pass
+
+    return count_incomplete
 
 
 def main(argv=None):
@@ -696,7 +690,6 @@ def main(argv=None):
     capa.main.install_common_args(parser, wanted={"tag"})
 
     args = parser.parse_args(args=argv)
-    global make_priv
     make_priv = args.private
 
     if args.verbose:
@@ -710,9 +703,8 @@ def main(argv=None):
     logging.getLogger("capa2yara").setLevel(level)
 
     try:
-        rules = capa.main.get_rules([args.rules], disable_progress=True)
-        namespaces = capa.rules.index_rules_by_namespace(list(rules))
-        rules = capa.rules.RuleSet(rules)
+        rules = capa.main.get_rules([args.rules])
+        namespaces = capa.rules.index_rules_by_namespace(list(rules.rules.values()))
         logger.info("successfully loaded %s rules (including subscope rules which will be ignored)", len(rules))
         if args.tag:
             rules = rules.filter_rules_by_meta(args.tag)
@@ -745,14 +737,15 @@ def main(argv=None):
     # do several rounds of converting rules because some rules for match: might not be converted in the 1st run
     num_rules = 9999999
     cround = 0
+    count_incomplete = 0
     while num_rules != len(converted_rules) or cround < min_rounds:
         cround += 1
         logger.info("doing convert_rules(), round: " + str(cround))
         num_rules = len(converted_rules)
-        convert_rules(rules, namespaces, cround)
+        count_incomplete += convert_rules(rules, namespaces, cround, make_priv)
 
     # one last round to collect all unconverted rules
-    convert_rules(rules, namespaces, 9000)
+    count_incomplete += convert_rules(rules, namespaces, 9000, make_priv)
 
     stats = "\n// converted rules              : " + str(len(converted_rules))
     stats += "\n//   among those are incomplete : " + str(count_incomplete)

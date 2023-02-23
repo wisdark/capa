@@ -44,7 +44,7 @@ def interface_extract_instruction_XXX(
     yields:
       (Feature, Address): the feature and the address at which its found.
     """
-    ...
+    raise NotImplementedError
 
 
 def get_imports(vw):
@@ -271,6 +271,10 @@ def extract_insn_bytes_features(fh: FunctionHandle, bb, ih: InsnHandle) -> Itera
             if capa.features.extractors.helpers.all_zeros(buf):
                 continue
 
+            if f.vw.isProbablyString(v):
+                # don't extract byte features for obvious strings
+                continue
+
             yield Bytes(buf), ih.address
 
 
@@ -281,7 +285,12 @@ def read_string(vw, offset: int) -> str:
         pass
     else:
         if alen > 0:
-            return read_memory(vw, offset, alen).decode("utf-8")
+            buf = read_memory(vw, offset, alen)
+            if b"\x00" in buf:
+                # account for bug #1271.
+                # remove when vivisect is fixed.
+                buf = buf.partition(b"\x00")[0]
+            return buf.decode("utf-8")
 
     try:
         ulen = vw.detectUnicode(offset)
@@ -300,7 +309,9 @@ def read_string(vw, offset: int) -> str:
                 # vivisect seems to mis-detect the end unicode strings
                 # off by two, too short
                 ulen += 2
-            return read_memory(vw, offset, ulen).decode("utf-16")
+            # partition to account for bug #1271.
+            # remove when vivisect is fixed.
+            return read_memory(vw, offset, ulen).decode("utf-16").partition("\x00")[0]
 
     raise ValueError("not a string", offset)
 
@@ -493,7 +504,8 @@ def extract_function_calls_from(fh: FunctionHandle, bb, ih: InsnHandle) -> Itera
     if isinstance(insn.opers[0], envi.archs.i386.disasm.i386ImmMemOper):
         oper = insn.opers[0]
         target = oper.getOperAddr(insn)
-        yield Characteristic("calls from"), AbsoluteVirtualAddress(target)
+        if target >= 0:
+            yield Characteristic("calls from"), AbsoluteVirtualAddress(target)
 
     # call via thunk on x86,
     # see 9324d1a8ae37a36ae560c37448c9705a at 0x407985
@@ -509,7 +521,8 @@ def extract_function_calls_from(fh: FunctionHandle, bb, ih: InsnHandle) -> Itera
     elif isinstance(insn.opers[0], envi.archs.amd64.disasm.Amd64RipRelOper):
         op = insn.opers[0]
         target = op.getOperAddr(insn)
-        yield Characteristic("calls from"), AbsoluteVirtualAddress(target)
+        if target >= 0:
+            yield Characteristic("calls from"), AbsoluteVirtualAddress(target)
 
     if target and target == f.va:
         # if we found a jump target and it's the function address
@@ -663,11 +676,12 @@ def extract_op_string_features(
 
     for v in derefs(f.vw, v):
         try:
-            s = read_string(f.vw, v)
+            s = read_string(f.vw, v).rstrip("\x00")
         except ValueError:
             continue
         else:
-            yield String(s.rstrip("\x00")), ih.address
+            if len(s) >= 4:
+                yield String(s), ih.address
 
 
 def extract_operand_features(f: FunctionHandle, bb, insn: InsnHandle) -> Iterator[Tuple[Feature, Address]]:

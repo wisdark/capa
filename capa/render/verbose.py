@@ -22,14 +22,14 @@ Unless required by applicable law or agreed to in writing, software distributed 
  is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and limitations under the License.
 """
+import enum
+
 import tabulate
-import dnfile.mdtable
-import dncil.clr.token
 
 import capa.rules
+import capa.helpers
 import capa.render.utils as rutils
 import capa.features.freeze as frz
-import capa.render.result_document
 import capa.render.result_document as rd
 from capa.rules import RuleSet
 from capa.engine import MatchResults
@@ -37,16 +37,23 @@ from capa.engine import MatchResults
 
 def format_address(address: frz.Address) -> str:
     if address.type == frz.AddressType.ABSOLUTE:
-        return rutils.hex(address.value)
+        assert isinstance(address.value, int)
+        return capa.helpers.hex(address.value)
     elif address.type == frz.AddressType.RELATIVE:
-        return f"base address+{rutils.hex(address.value)}"
+        assert isinstance(address.value, int)
+        return f"base address+{capa.helpers.hex(address.value)}"
     elif address.type == frz.AddressType.FILE:
-        return f"file+{rutils.hex(address.value)}"
+        assert isinstance(address.value, int)
+        return f"file+{capa.helpers.hex(address.value)}"
     elif address.type == frz.AddressType.DN_TOKEN:
-        return f"token({rutils.hex(address.value)})"
+        assert isinstance(address.value, int)
+        return f"token({capa.helpers.hex(address.value)})"
     elif address.type == frz.AddressType.DN_TOKEN_OFFSET:
+        assert isinstance(address.value, tuple)
         token, offset = address.value
-        return f"token({rutils.hex(token)})+{rutils.hex(offset)}"
+        assert isinstance(token, int)
+        assert isinstance(offset, int)
+        return f"token({capa.helpers.hex(token)})+{capa.helpers.hex(offset)}"
     elif address.type == frz.AddressType.NO_ADDRESS:
         return "global"
     else:
@@ -127,6 +134,9 @@ def render_rules(ostream, doc: rd.ResultDocument):
 
             if isinstance(v, list) and len(v) == 1:
                 v = v[0]
+
+            if isinstance(v, enum.Enum):
+                v = v.value
 
             rows.append((key, v))
 

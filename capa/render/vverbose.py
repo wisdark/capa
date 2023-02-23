@@ -6,11 +6,12 @@
 #  is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and limitations under the License.
 
-from typing import Dict, List, Iterable
+from typing import Dict, Iterable
 
 import tabulate
 
 import capa.rules
+import capa.helpers
 import capa.render.utils as rutils
 import capa.render.verbose
 import capa.features.common
@@ -128,7 +129,11 @@ def render_feature(ostream, match: rd.Match, feature: frzf.Feature, indent=0):
     ostream.write("  " * indent)
 
     key = feature.type
-    if isinstance(feature, frzf.ImportFeature):
+    if isinstance(feature, frzf.BasicBlockFeature):
+        # i don't think it makes sense to have standalone basic block features.
+        # we don't parse them from rules, only things like: `count(basic block) > 1`
+        raise ValueError("cannot render basic block feature directly")
+    elif isinstance(feature, frzf.ImportFeature):
         # fixup access to Python reserved name
         value = feature.import_
     elif isinstance(feature, frzf.ClassFeature):
@@ -140,23 +145,28 @@ def render_feature(ostream, match: rd.Match, feature: frzf.Feature, indent=0):
     if value is None:
         raise ValueError("%s contains None" % key)
 
-    if key not in ("regex", "substring"):
+    if not isinstance(feature, (frzf.RegexFeature, frzf.SubstringFeature)):
         # like:
         #   number: 10 = SOME_CONSTANT @ 0x401000
-        if key == "string":
+        if isinstance(feature, frzf.StringFeature):
             value = render_string_value(value)
 
-        if key == "number":
+        elif isinstance(
+            feature, (frzf.NumberFeature, frzf.OffsetFeature, frzf.OperandNumberFeature, frzf.OperandOffsetFeature)
+        ):
             assert isinstance(value, int)
-            value = hex(value)
+            value = capa.helpers.hex(value)
 
-        ostream.write(key)
+        if isinstance(feature, frzf.PropertyFeature) and feature.access is not None:
+            key = f"property/{feature.access}"
 
-        if isinstance(feature, frzf.PropertyFeature):
-            if feature.access is not None:
-                ostream.write("/" + feature.access)
+        elif isinstance(feature, frzf.OperandNumberFeature):
+            key = f"operand[{feature.index}].number"
 
-        ostream.write(": ")
+        elif isinstance(feature, frzf.OperandOffsetFeature):
+            key = f"operand[{feature.index}].offset"
+
+        ostream.write(f"{key}: ")
 
         if value:
             ostream.write(rutils.bold2(value))
@@ -165,7 +175,7 @@ def render_feature(ostream, match: rd.Match, feature: frzf.Feature, indent=0):
                 ostream.write(capa.rules.DESCRIPTION_SEPARATOR)
                 ostream.write(feature.description)
 
-        if key not in ("os", "arch"):
+        if not isinstance(feature, (frzf.OSFeature, frzf.ArchFeature, frzf.FormatFeature)):
             render_locations(ostream, match.locations)
         ostream.write("\n")
     else:
@@ -267,7 +277,7 @@ def render_rules(ostream, doc: rd.ResultDocument):
 
     had_match = False
 
-    for (_, _, rule) in sorted(map(lambda rule: (rule.meta.namespace or "", rule.meta.name, rule), doc.rules.values())):
+    for _, _, rule in sorted(map(lambda rule: (rule.meta.namespace or "", rule.meta.name, rule), doc.rules.values())):
         # default scope hides things like lib rules, malware-category rules, etc.
         # but in vverbose mode, we really want to show everything.
         #
@@ -275,17 +285,24 @@ def render_rules(ostream, doc: rd.ResultDocument):
         if rule.meta.is_subscope_rule:
             continue
 
+        lib_info = ""
         count = len(rule.matches)
         if count == 1:
-            capability = rutils.bold(rule.meta.name)
+            if rule.meta.lib:
+                lib_info = " (library rule)"
+            capability = "%s%s" % (rutils.bold(rule.meta.name), lib_info)
         else:
-            capability = "%s (%d matches)" % (rutils.bold(rule.meta.name), count)
+            if rule.meta.lib:
+                lib_info = ", only showing first match of library rule"
+            capability = "%s (%d matches%s)" % (rutils.bold(rule.meta.name), count, lib_info)
 
         ostream.writeln(capability)
         had_match = True
 
         rows = []
-        rows.append(("namespace", rule.meta.namespace))
+        if not rule.meta.lib:
+            # library rules should not have a namespace
+            rows.append(("namespace", rule.meta.namespace))
 
         if rule.meta.maec.analysis_conclusion or rule.meta.maec.analysis_conclusion_ov:
             rows.append(
@@ -345,6 +362,10 @@ def render_rules(ostream, doc: rd.ResultDocument):
 
                 ostream.write("\n")
                 render_match(ostream, match, indent=1)
+                if rule.meta.lib:
+                    # only show first match
+                    break
+
         ostream.write("\n")
 
     if not had_match:

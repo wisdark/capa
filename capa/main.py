@@ -17,11 +17,10 @@ import os.path
 import argparse
 import datetime
 import textwrap
-import warnings
 import itertools
 import contextlib
 import collections
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Callable
 
 import halo
 import tqdm
@@ -34,6 +33,7 @@ import capa.rules
 import capa.engine
 import capa.version
 import capa.render.json
+import capa.rules.cache
 import capa.render.default
 import capa.render.verbose
 import capa.features.common
@@ -66,25 +66,24 @@ from capa.features.common import (
     FORMAT_DOTNET,
     FORMAT_FREEZE,
 )
-from capa.features.address import NO_ADDRESS
+from capa.features.address import NO_ADDRESS, Address
 from capa.features.extractors.base_extractor import BBHandle, InsnHandle, FunctionHandle, FeatureExtractor
 
 RULES_PATH_DEFAULT_STRING = "(embedded rules)"
 SIGNATURES_PATH_DEFAULT_STRING = "(embedded signatures)"
 BACKEND_VIV = "vivisect"
-BACKEND_SMDA = "smda"
 BACKEND_DOTNET = "dotnet"
 
-E_MISSING_RULES = -10
-E_MISSING_FILE = -11
-E_INVALID_RULE = -12
-E_CORRUPT_FILE = -13
-E_FILE_LIMITATION = -14
-E_INVALID_SIG = -15
-E_INVALID_FILE_TYPE = -16
-E_INVALID_FILE_ARCH = -17
-E_INVALID_FILE_OS = -18
-E_UNSUPPORTED_IDA_VERSION = -19
+E_MISSING_RULES = 10
+E_MISSING_FILE = 11
+E_INVALID_RULE = 12
+E_CORRUPT_FILE = 13
+E_FILE_LIMITATION = 14
+E_INVALID_SIG = 15
+E_INVALID_FILE_TYPE = 16
+E_INVALID_FILE_ARCH = 17
+E_INVALID_FILE_OS = 18
+E_UNSUPPORTED_IDA_VERSION = 19
 
 logger = logging.getLogger("capa")
 
@@ -332,7 +331,7 @@ def has_file_limitation(rules: RuleSet, capabilities: MatchResults, is_standalon
 
         logger.warning("-" * 80)
         for line in file_limitation_rule.meta.get("description", "").split("\n"):
-            logger.warning(" " + line)
+            logger.warning(" %s", line)
         logger.warning(" Identified via rule: %s", file_limitation_rule.name)
         if is_standalone:
             logger.warning(" ")
@@ -433,7 +432,7 @@ def get_default_signatures() -> List[str]:
     logger.debug("signatures path: %s", sigs_path)
 
     ret = []
-    for root, dirs, files in os.walk(sigs_path):
+    for root, _, files in os.walk(sigs_path):
         for file in files:
             if not (file.endswith(".pat") or file.endswith(".pat.gz") or file.endswith(".sig")):
                 continue
@@ -461,6 +460,7 @@ def get_workspace(path, format_, sigpaths):
 
     # lazy import enables us to not require viv if user wants SMDA, for example.
     import viv_utils
+    import viv_utils.flirt
 
     logger.debug("generating vivisect workspace for: %s", path)
     # TODO should not be auto at this point, anymore
@@ -513,22 +513,7 @@ def get_extractor(
 
         return capa.features.extractors.dnfile.extractor.DnfileFeatureExtractor(path)
 
-    if backend == "smda":
-        from smda.SmdaConfig import SmdaConfig
-        from smda.Disassembler import Disassembler
-
-        import capa.features.extractors.smda.extractor
-
-        logger.warning("Deprecation warning: v4.0 will be the last capa version to support the SMDA backend.")
-        warnings.warn("v4.0 will be the last capa version to support the SMDA backend.", DeprecationWarning)
-        smda_report = None
-        with halo.Halo(text="analyzing program", spinner="simpleDots", stream=sys.stderr, enabled=not disable_progress):
-            config = SmdaConfig()
-            config.STORE_BUFFER = True
-            smda_disasm = Disassembler(config)
-            smda_report = smda_disasm.disassembleFile(path)
-
-        return capa.features.extractors.smda.extractor.SmdaFeatureExtractor(smda_report, path)
+    # default to use vivisect backend
     else:
         import capa.features.extractors.viv.extractor
 
@@ -551,12 +536,12 @@ def get_extractor(
 def get_file_extractors(sample: str, format_: str) -> List[FeatureExtractor]:
     file_extractors: List[FeatureExtractor] = list()
 
-    if format_ == capa.features.extractors.common.FORMAT_PE:
+    if format_ == FORMAT_PE:
         file_extractors.append(capa.features.extractors.pefile.PefileFeatureExtractor(sample))
 
-        dnfile_extractor = capa.features.extractors.dnfile_.DnfileFeatureExtractor(sample)
-        if dnfile_extractor.is_dotnet_file():
-            file_extractors.append(dnfile_extractor)
+    elif format_ == FORMAT_DOTNET:
+        file_extractors.append(capa.features.extractors.pefile.PefileFeatureExtractor(sample))
+        file_extractors.append(capa.features.extractors.dnfile_.DnfileFeatureExtractor(sample))
 
     elif format_ == capa.features.extractors.common.FORMAT_ELF:
         file_extractors.append(capa.features.extractors.elffile.ElfFeatureExtractor(sample))
@@ -577,7 +562,10 @@ def is_nursery_rule_path(path: str) -> bool:
     return "nursery" in path
 
 
-def get_rules(rule_paths: List[str], disable_progress=False) -> List[Rule]:
+def collect_rule_file_paths(rule_paths: List[str]) -> List[str]:
+    """
+    collect all rule file paths, including those in subdirectories.
+    """
     rule_file_paths = []
     for rule_path in rule_paths:
         if not os.path.exists(rule_path):
@@ -587,7 +575,7 @@ def get_rules(rule_paths: List[str], disable_progress=False) -> List[Rule]:
             rule_file_paths.append(rule_path)
         elif os.path.isdir(rule_path):
             logger.debug("reading rules from directory %s", rule_path)
-            for root, dirs, files in os.walk(rule_path):
+            for root, _, files in os.walk(rule_path):
                 if ".git" in root:
                     # the .github directory contains CI config in capa-rules
                     # this includes some .yml files
@@ -605,28 +593,69 @@ def get_rules(rule_paths: List[str], disable_progress=False) -> List[Rule]:
                     rule_path = os.path.join(root, file)
                     rule_file_paths.append(rule_path)
 
+    return rule_file_paths
+
+
+# TypeAlias. note: using `foo: TypeAlias = bar` is Python 3.10+
+RulePath = str
+
+
+def on_load_rule_default(_path: RulePath, i: int, _total: int) -> None:
+    return
+
+
+def get_rules(
+    rule_paths: List[RulePath],
+    cache_dir=None,
+    on_load_rule: Callable[[RulePath, int, int], None] = on_load_rule_default,
+) -> RuleSet:
+    """
+    args:
+      rule_paths: list of paths to rules files or directories containing rules files
+      cache_dir: directory to use for caching rules, or will use the default detected cache directory if None
+      on_load_rule: callback to invoke before a rule is loaded, use for progress or cancellation
+    """
+    if cache_dir is None:
+        cache_dir = capa.rules.cache.get_default_cache_directory()
+
+    # rule_paths may contain directory paths,
+    # so search for file paths recursively.
+    rule_file_paths = collect_rule_file_paths(rule_paths)
+
+    # this list is parallel to `rule_file_paths`:
+    # rule_file_paths[i] corresponds to rule_contents[i].
+    rule_contents = []
+    for file_path in rule_file_paths:
+        with open(file_path, "rb") as f:
+            rule_contents.append(f.read())
+
+    ruleset = capa.rules.cache.load_cached_ruleset(cache_dir, rule_contents)
+    if ruleset is not None:
+        return ruleset
+
     rules = []  # type: List[Rule]
 
-    pbar = tqdm.tqdm
-    if disable_progress:
-        # do not use tqdm to avoid unnecessary side effects when caller intends
-        # to disable progress completely
-        pbar = lambda s, *args, **kwargs: s
+    total_rule_count = len(rule_file_paths)
+    for i, (path, content) in enumerate(zip(rule_file_paths, rule_contents)):
+        on_load_rule(path, i, total_rule_count)
 
-    for rule_file_path in pbar(list(rule_file_paths), desc="loading ", unit=" rules"):
         try:
-            rule = capa.rules.Rule.from_yaml_file(rule_file_path)
+            rule = capa.rules.Rule.from_yaml(content.decode("utf-8"))
         except capa.rules.InvalidRule:
             raise
         else:
-            rule.meta["capa/path"] = rule_file_path
-            if is_nursery_rule_path(rule_file_path):
+            rule.meta["capa/path"] = path
+            if is_nursery_rule_path(path):
                 rule.meta["capa/nursery"] = True
 
             rules.append(rule)
             logger.debug("loaded rule: '%s' with scope: %s", rule.name, rule.scope)
 
-    return rules
+    ruleset = capa.rules.RuleSet(rules)
+
+    capa.rules.cache.cache_ruleset(cache_dir, ruleset)
+
+    return ruleset
 
 
 def get_signatures(sigs_path):
@@ -638,7 +667,7 @@ def get_signatures(sigs_path):
         paths.append(sigs_path)
     elif os.path.isdir(sigs_path):
         logger.debug("reading signatures from directory %s", os.path.abspath(os.path.normpath(sigs_path)))
-        for root, dirs, files in os.walk(sigs_path):
+        for root, _, files in os.walk(sigs_path):
             for file in files:
                 if file.endswith((".pat", ".pat.gz", ".sig")):
                     sig_path = os.path.join(root, file)
@@ -717,8 +746,8 @@ def compute_layout(rules, extractor, capabilities):
     otherwise, we may pollute the json document with
     a large amount of un-referenced data.
     """
-    functions_by_bb = {}
-    bbs_by_function = {}
+    functions_by_bb: Dict[Address, Address] = {}
+    bbs_by_function: Dict[Address, List[Address]] = {}
     for f in extractor.get_functions():
         bbs_by_function[f.address] = []
         for bb in extractor.get_basic_blocks(f):
@@ -729,7 +758,7 @@ def compute_layout(rules, extractor, capabilities):
     for rule_name, matches in capabilities.items():
         rule = rules[rule_name]
         if rule.meta.get("scope") == capa.rules.BASIC_BLOCK_SCOPE:
-            for (addr, match) in matches:
+            for addr, _ in matches:
                 assert addr in functions_by_bb
                 matched_bbs.add(addr)
 
@@ -830,7 +859,7 @@ def install_common_args(parser, wanted=None):
                 "--backend",
                 type=str,
                 help="select the backend to use",
-                choices=(BACKEND_VIV, BACKEND_SMDA),
+                choices=(BACKEND_VIV,),
                 default=BACKEND_VIV,
             )
 
@@ -864,6 +893,9 @@ def handle_common_args(args):
     the following fields will be overwritten when present:
       - rules: file system path to rule files.
       - signatures: file system path to signature files.
+
+    the following field may be added:
+      - is_default_rules: if the default rules were used.
 
     args:
       args (argparse.Namespace): parsed arguments that included at least `install_common_args` args.
@@ -924,6 +956,7 @@ def handle_common_args(args):
                 return E_MISSING_RULES
 
             rules_paths.append(default_rule_path)
+            args.is_default_rules = True
         else:
             rules_paths = args.rules
 
@@ -932,6 +965,8 @@ def handle_common_args(args):
 
             for rule_path in rules_paths:
                 logger.debug("using rules path: %s", rule_path)
+
+            args.is_default_rules = False
 
         args.rules = rules_paths
 
@@ -1010,20 +1045,27 @@ def main(argv=None):
     if format_ == FORMAT_AUTO:
         try:
             format_ = get_auto_format(args.sample)
+        except PEFormatError as e:
+            logger.error("Input file '%s' is not a valid PE file: %s", args.sample, str(e))
+            return E_CORRUPT_FILE
         except UnsupportedFormatError:
             log_unsupported_format_error()
             return E_INVALID_FILE_TYPE
 
     try:
-        rules = get_rules(args.rules, disable_progress=args.quiet)
-        rules = capa.rules.RuleSet(rules)
+        if is_running_standalone() and args.is_default_rules:
+            cache_dir = os.path.join(get_default_root(), "cache")
+        else:
+            cache_dir = capa.rules.cache.get_default_cache_directory()
+
+        rules = get_rules(args.rules, cache_dir=cache_dir)
 
         logger.debug(
             "successfully loaded %s rules",
             # during the load of the RuleSet, we extract subscope statements into their own rules
             # that are subsequently `match`ed upon. this inflates the total rule count.
             # so, filter out the subscope rules when reporting total number of loaded rules.
-            len([i for i in filter(lambda r: not r.is_subscope_rule(), rules.rules.values())]),
+            len(list(filter(lambda r: not r.is_subscope_rule(), rules.rules.values()))),
         )
         if args.tag:
             rules = rules.filter_rules_by_meta(args.tag)
@@ -1034,12 +1076,12 @@ def main(argv=None):
     except (IOError, capa.rules.InvalidRule, capa.rules.InvalidRuleSet) as e:
         logger.error("%s", str(e))
         logger.error(
-            "Please ensure you're using the rules that correspond to your major version of capa (%s)",
-            capa.version.get_major_version(),
+            "Make sure your file directory contains properly formatted capa rules. You can download the standard "
+            "collection of capa rules from https://github.com/mandiant/capa-rules/releases."
         )
         logger.error(
-            "You can check out these rules with the following command:\n    %s",
-            capa.version.get_rules_checkout_command(),
+            "Please ensure you're using the rules that correspond to your major version of capa (%s)",
+            capa.version.get_major_version(),
         )
         logger.error(
             "Or, for more details, see the rule set documentation here: %s",
@@ -1072,9 +1114,6 @@ def main(argv=None):
         except (ELFError, OverflowError) as e:
             logger.error("Input file '%s' is not a valid ELF file: %s", args.sample, str(e))
             return E_CORRUPT_FILE
-
-        if isinstance(file_extractor, capa.features.extractors.dnfile_.DnfileFeatureExtractor):
-            format_ = FORMAT_DOTNET
 
         # file limitations that rely on non-file scope won't be detected here.
         # nor on FunctionName features, because pefile doesn't support this.
@@ -1166,8 +1205,7 @@ def ida_main():
 
     rules_path = os.path.join(get_default_root(), "rules")
     logger.debug("rule path: %s", rules_path)
-    rules = get_rules(rules_path)
-    rules = capa.rules.RuleSet(rules)
+    rules = get_rules([rules_path])
 
     meta = capa.ida.helpers.collect_metadata([rules_path])
 

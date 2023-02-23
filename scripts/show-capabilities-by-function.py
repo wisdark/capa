@@ -142,7 +142,6 @@ def main(argv=None):
 
     try:
         rules = capa.main.get_rules(args.rules)
-        rules = capa.rules.RuleSet(rules)
         logger.info("successfully loaded %s rules", len(rules))
         if args.tag:
             rules = rules.filter_rules_by_meta(args.tag)
@@ -153,16 +152,16 @@ def main(argv=None):
 
     try:
         sig_paths = capa.main.get_signatures(args.signatures)
-    except (IOError) as e:
+    except IOError as e:
         logger.error("%s", str(e))
         return -1
 
     if (args.format == "freeze") or (args.format == "auto" and capa.features.freeze.is_freeze(taste)):
-        format = "freeze"
+        format_ = "freeze"
         with open(args.sample, "rb") as f:
             extractor = capa.features.freeze.load(f.read())
     else:
-        format = args.format
+        format_ = args.format
         should_save_workspace = os.environ.get("CAPA_SAVE_WORKSPACE") not in ("0", "no", "NO", "n", None)
 
         try:

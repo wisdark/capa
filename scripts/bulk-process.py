@@ -153,7 +153,6 @@ def main(argv=None):
 
         try:
             rules = capa.main.get_rules(args.rules)
-            rules = capa.rules.RuleSet(rules)
             logger.info("successfully loaded %s rules", len(rules))
         except (IOError, capa.rules.InvalidRule, capa.rules.InvalidRuleSet) as e:
             logger.error("%s", str(e))
@@ -161,12 +160,12 @@ def main(argv=None):
 
         try:
             sig_paths = capa.main.get_signatures(args.signatures)
-        except (IOError) as e:
+        except IOError as e:
             logger.error("%s", str(e))
             return -1
 
         samples = []
-        for (base, directories, files) in os.walk(args.input):
+        for base, directories, files in os.walk(args.input):
             for file in files:
                 samples.append(os.path.join(base, file))
 

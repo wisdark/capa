@@ -3,13 +3,64 @@
 ## master (unreleased)
 
 ### New Features
-- verify rule metadata format on load #1160 @mr-tz
-- extract property features from .NET PE files #1168 @anushkavirgaonkar
-- emit features for .NET newobj instruction #1186 @mike-hunhoff
 
 ### Breaking Changes
 
-### New Rules (29)
+### New Rules (9)
+
+- persistence/scheduled-tasks/schedule-task-via-at joren485
+- data-manipulation/prng/generate-random-numbers-via-rtlgenrandom william.ballenthin@mandiant.com
+- communication/ip/convert-ip-address-from-string @mr-tz
+- data-manipulation/compression/compress-data-via-zlib-inflate-or-deflate blas.kojusner@mandiant.com
+- executable/installer/dotnet/packaged-as-single-file-dotnet-application michael.hunhoff@mandiant.com
+- communication/socket/create-raw-socket blas.kojusner@mandiant.com
+- communication/http/reference-http-user-agent-string @mr-tz
+- communication/http/get-http-content-length william.ballenthin@mandiant.com
+- nursery/move-directory michael.hunhoff@mandiant.com
+-
+
+### Bug Fixes
+- extractor: fix vivisect loop detection corner case #1310 @mr-tz
+
+### capa explorer IDA Pro plugin
+
+### Development
+
+### Raw diffs
+- [capa v5.0.0...master](https://github.com/mandiant/capa/compare/v5.0.0...master)
+- [capa-rules v5.0.0...master](https://github.com/mandiant/capa-rules/compare/v5.0.0...master)
+
+
+## v5.0.0 (2023-02-08)
+This capa version comes with major improvements and additions to better handle .NET binaries. To showcase this we've updated and added over 30 .NET rules.  
+
+Additionally, capa now caches its rule set for better performance. The capa explorer also caches its analysis results, so that multiple IDA Pro or plugin invocations don't need to repeat the same analysis.
+
+We have removed the SMDA backend and changed the program return codes to be positive numbers.
+
+Other improvements to highlight include better ELF OS detection, various rendering bug fixes, and enhancements to the feature extraction. We've also added support for Python 3.11.
+
+Thanks for all the support, especially to @jsoref, @bkojusner, @edeca, @richardweiss80, @joren485, @ryantxu1, @mwilliams31, @anushkavirgaonkar, @MalwareMechanic, @Still34, @dzbeck, @johnk3r, and everyone else who submitted bugs and provided feedback!
+
+### New Features
+- verify rule metadata format on load #1160 @mr-tz
+- dotnet: emit property features #1168 @anushkavirgaonkar
+- dotnet: emit API features for objects created via the newobj instruction #1186 @mike-hunhoff
+- dotnet: emit API features for generic methods #1231 @mike-hunhoff
+- Python 3.11 support #1192 @williballenthin
+- dotnet: emit calls to/from MethodDef methods #1236 @mike-hunhoff
+- dotnet: emit namespace/class features for ldvirtftn/ldftn instructions #1241 @mike-hunhoff
+- dotnet: emit namespace/class features for type references #1242 @mike-hunhoff
+- dotnet: extract dotnet and pe format #1187 @mr-tz
+- don't render all library rule matches in vverbose output #1174 @mr-tz
+- cache the rule set across invocations for better performance #1212 @williballenthin
+- update ATT&CK/MBC data for linting #1297 @mr-tz
+
+### Breaking Changes
+- remove SMDA backend #1062 @williballenthin
+- error return codes are now positive numbers #1269 @mr-tz
+
+### New Rules (77)
 
 - collection/use-dotnet-library-sharpclipboard @johnk3r
 - data-manipulation/encryption/aes/use-dotnet-library-encryptdecryptutils @johnk3r
@@ -39,22 +90,86 @@
 - nursery/execute-via-timer-in-dotnet michael.hunhoff@mandiant.com
 - nursery/execute-wmi-query-in-dotnet michael.hunhoff@mandiant.com
 - nursery/manipulate-network-credentials-in-dotnet michael.hunhoff@mandiant.com
--
+- nursery/encrypt-data-using-aes william.ballenthin@mandiant.com Ivan Kwiatkowski (@JusticeRage)
+- host-interaction/uac/bypass/bypass-uac-via-rpc david.cannings@pwc.com david@edeca.net
+- nursery/check-for-vm-using-instruction-vpcext richard.weiss@mandiant.com
+- nursery/get-windows-directory-from-kuser_shared_data david.cannings@pwc.com
+- nursery/encrypt-data-using-openssl-dsa Ana06
+- nursery/encrypt-data-using-openssl-ecdsa Ana06
+- nursery/encrypt-data-using-openssl-rsa Ana06
+- runtime/dotnet/execute-via-dotnet-startup-hook william.ballenthin@mandiant.com
+- host-interaction/console/manipulate-console-buffer william.ballenthin@mandiant.com michael.hunhoff@mandiant.com
+- nursery/access-wmi-data-in-dotnet michael.hunhoff@mandiant.com
+- nursery/allocate-unmanaged-memory-via-dotnet michael.hunhoff@mandiant.com
+- nursery/generate-random-bytes-in-dotnet michael.hunhoff@mandiant.com
+- nursery/manipulate-console-window michael.hunhoff@mandiant.com
+- nursery/obfuscated-with-koivm michael.hunhoff@mandiant.com
+- nursery/implement-com-dll moritz.raabe@mandiant.com
+- nursery/linked-against-libsodium @mr-tz
+- compiler/nuitka/compiled-with-nuitka @williballenthin
+- nursery/authenticate-data-with-md5-mac william.ballenthin@mandiant.com
+- nursery/resolve-function-by-djb2-hash still@teamt5.org
+- host-interaction/mutex/create-semaphore-on-linux @ramen0x3f
+- host-interaction/mutex/lock-semaphore-on-linux @ramen0x3f
+- host-interaction/mutex/unlock-semaphore-on-linux @ramen0x3f
+- data-manipulation/hashing/sha384/hash-data-using-sha384 william.ballenthin@mandiant.com
+- data-manipulation/hashing/sha512/hash-data-using-sha512 william.ballenthin@mandiant.com
+- nursery/decode-data-using-url-encoding michael.hunhoff@mandiant.com
+- nursery/manipulate-user-privileges michael.hunhoff@mandiant.com
+- lib/get-os-version @mr-tz
+- nursery/decrypt-data-using-tea william.ballenthin@mandiant.com
+- nursery/encrypt-data-using-tea william.ballenthin@mandiant.com
+- nursery/hash-data-using-whirlpool william.ballenthin@mandiant.com
+- nursery/reference-base58-string william.ballenthin@mandiant.com
+- communication/mailslot/create-mailslot william.ballenthin@mandiant.com
+- executable/resource/access-dotnet-resource @mr-tz
+- linking/static/linked-against-cpp-standard-library @mr-tz
+- data-manipulation/compression/compress-data-using-lzo david@edeca.net david.cannings@pwc.com
+- data-manipulation/compression/decompress-data-using-lzo david@edeca.net david.cannings@pwc.com
+- communication/socket/tcp/create-tcp-socket-via-raw-afd-driver william.ballenthin@mandiant.com
+- host-interaction/process/map-section-object william.ballenthin@mandiant.com
+- lib/create-or-open-section-object william.ballenthin@mandiant.com
+- load-code/dotnet/execute-dotnet-assembly-via-clr-host blas.kojusner@mandiant.com
+- load-code/execute-vbscript-javascript-or-jscript-in-memory blas.kojusner@mandiant.com
+- host-interaction/file-system/reference-absolute-stream-path-on-windows blas.kojusner@mandiant.com
+- nursery/generate-method-via-reflection-in-dotnet michael.hunhoff@mandiant.com
+- nursery/unmanaged-call-via-dynamic-pinvoke-in-dotnet michael.hunhoff@mandiant.com
 
 ### Bug Fixes
 - render: convert feature attributes to aliased dictionary for vverbose #1152 @mike-hunhoff
 - decouple Token dependency / extractor and features #1139 @mr-tz
 - update pydantic model to guarantee type coercion #1176 @mike-hunhoff
 - do not overwrite version in version.py during PyInstaller build #1169 @mr-tz
+- render: fix vverbose rendering of offsets #1215 @williballenthin
+- elf: better detect OS via GLIBC ABI version needed and dependencies #1221 @williballenthin
+- dotnet: address unhandled exceptions with improved type checking #1230 @mike-hunhoff
+- fix import-to-ida script formatting #1208 @williballenthin
+- render: fix verbose rendering of scopes #1263 @williballenthin
+- rules: better detect invalid rules #1282 @williballenthin
+- show-features: better render strings with embedded whitespace #1267 @williballenthin
+- handle vivisect bug around strings at instruction level, use min length 4 #1271 @williballenthin @mr-tz
+- extractor: guard against invalid "calls from" features #1177 @mr-tz
+- extractor: add format to global features #1258 @mr-tz
+- extractor: discover all strings with length >= 4 #1280 @mr-tz
+- extractor: don't extract byte features for strings #1293 @mr-tz
 
 ### capa explorer IDA Pro plugin
 - fix: display instruction items #1154 @mr-tz
-
-### Development
+- fix: accept only plaintext pasted content #1194 @williballenthin
+- fix: UnboundLocalError #1217 @williballenthin
+- extractor: add support for COFF files and extern functions #1223 @mike-hunhoff
+- doc: improve error messaging and documentation related to capa rule set #1249 @mike-hunhoff
+- fix: assume 32-bit displacement for offsets #1250 @mike-hunhoff
+- generator: refactor caching and matching #1251 @mike-hunhoff
+- fix: improve exception handling to prevent IDA from locking up when errors occur #1262 @mike-hunhoff
+- verify rule metadata using Pydantic #1167 @mr-tz
+- extractor: make read consistent with file object behavior #1254 @mr-tz
+- fix: UnboundLocalError x2 #1302 @mike-hunhoff
+- cache capa results across IDA sessions #1279 @mr-tz
 
 ### Raw diffs
-- [capa v4.0.1...master](https://github.com/mandiant/capa/compare/v4.0.1...master)
-- [capa-rules v4.0.1...master](https://github.com/mandiant/capa-rules/compare/v4.0.1...master)
+- [capa v4.0.1...v5.0.0](https://github.com/mandiant/capa/compare/v4.0.1...v5.0.0)
+- [capa-rules v4.0.1...v5.0.0](https://github.com/mandiant/capa-rules/compare/v4.0.1...v5.0.0)
 
 
 ## v4.0.1 (2022-08-15)
@@ -1280,7 +1395,7 @@ Download a standalone binary below and checkout the readme [here on GitHub](http
   - setup: pin vivisect version @williballenthin
   - setup: bump vivisect dependency version @williballenthin
   - setup: set Python project name to `flare-capa` @williballenthin
-  - ci: run tests and linter via Github Actions @Ana06
+  - ci: run tests and linter via GitHub Actions @Ana06
   - hooks: run style checkers and hide stashed output @Ana06
   - linter: ignore period in rule filename @williballenthin
   - linter: warn on nursery rule with no changes needed @williballenthin

@@ -70,7 +70,7 @@ class MitreExtractor:
         self._memory_store = MemoryStore(stix_data=stix_json["objects"])
 
     @staticmethod
-    def _remove_deprecated_objetcs(stix_objects) -> List[AttackPattern]:
+    def _remove_deprecated_objects(stix_objects) -> List[AttackPattern]:
         """Remove any revoked or deprecated objects from queries made to the data source."""
         return list(
             filter(
@@ -82,7 +82,7 @@ class MitreExtractor:
     def _get_tactics(self) -> List[Dict]:
         """Get tactics IDs from Mitre matrix."""
         # Only one matrix for enterprise att&ck framework
-        matrix = self._remove_deprecated_objetcs(
+        matrix = self._remove_deprecated_objects(
             self._memory_store.query(
                 [
                     Filter("type", "=", "x-mitre-matrix"),
@@ -93,7 +93,7 @@ class MitreExtractor:
 
     def _get_techniques_from_tactic(self, tactic: str) -> List[AttackPattern]:
         """Get techniques and sub techniques from a Mitre tactic (kill_chain_phases->phase_name)"""
-        techniques = self._remove_deprecated_objetcs(
+        techniques = self._remove_deprecated_objects(
             self._memory_store.query(
                 [
                     Filter("type", "=", "attack-pattern"),
@@ -107,7 +107,7 @@ class MitreExtractor:
     def _get_parent_technique_from_subtechnique(self, technique: AttackPattern) -> AttackPattern:
         """Get parent technique of a sub technique using the technique ID TXXXX.YYY"""
         sub_id = technique["external_references"][0]["external_id"].split(".")[0]
-        parent_technique = self._remove_deprecated_objetcs(
+        parent_technique = self._remove_deprecated_objects(
             self._memory_store.query(
                 [
                     Filter("type", "=", "attack-pattern"),
@@ -125,7 +125,10 @@ class MitreExtractor:
         data: Dict[str, Dict[str, str]] = {}
         for tactic in self._get_tactics():
             data[tactic["name"]] = {}
-            for technique in self._get_techniques_from_tactic(tactic["x_mitre_shortname"]):
+            for technique in sorted(
+                self._get_techniques_from_tactic(tactic["x_mitre_shortname"]),
+                key=lambda x: x["external_references"][0]["external_id"],
+            ):
                 tid = technique["external_references"][0]["external_id"]
                 technique_name = technique["name"].split("::")[0]
                 if technique["x_mitre_is_subtechnique"]:
@@ -151,7 +154,7 @@ class MbcExtractor(MitreExtractor):
 
     def _get_tactics(self) -> List[Dict]:
         """Override _get_tactics to edit the tactic name for Micro-objective"""
-        tactics = super(MbcExtractor, self)._get_tactics()
+        tactics = super()._get_tactics()
         # We don't want the Micro-objective string inside objective names
         for tactic in tactics:
             tactic["name"] = tactic["name"].replace(" Micro-objective", "")

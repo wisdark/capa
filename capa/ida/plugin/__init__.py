@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 
 
 class CapaExplorerPlugin(idaapi.plugin_t):
-
     # Mandatory definitions
     PLUGIN_NAME = "FLARE capa explorer"
     PLUGIN_VERSION = "1.0.0"
@@ -85,7 +84,7 @@ class CapaExplorerPlugin(idaapi.plugin_t):
 # so we need to register a callback that's invoked from the main thread after the plugin is registered.
 #
 # after a lot of guess-and-check, we can use `UI_Hooks.updated_actions` to
-#  receive notications after IDA has created an action for each plugin.
+#  receive notifications after IDA has created an action for each plugin.
 # so, create this hook, wait for capa plugin to load, set the icon, and unhook.
 
 
@@ -93,7 +92,7 @@ class OnUpdatedActionsHook(ida_kernwin.UI_Hooks):
     """register a callback to be invoked each time the UI actions are updated"""
 
     def __init__(self, cb):
-        super(OnUpdatedActionsHook, self).__init__()
+        super().__init__()
         self.cb = cb
 
     def updated_actions(self):

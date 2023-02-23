@@ -118,21 +118,9 @@ def fixup_viv(path, extractor):
     if "3b13b" in path:
         # vivisect only recognizes calling thunk function at 0x10001573
         extractor.vw.makeFunction(0x10006860)
-
-
-@lru_cache()
-def get_smda_extractor(path):
-    from smda.SmdaConfig import SmdaConfig
-    from smda.Disassembler import Disassembler
-
-    import capa.features.extractors.smda.extractor
-
-    config = SmdaConfig()
-    config.STORE_BUFFER = True
-    disasm = Disassembler(config)
-    report = disasm.disassembleFile(path)
-
-    return capa.features.extractors.smda.extractor.SmdaFeatureExtractor(report, path)
+    if "294b8d" in path:
+        # see vivisect/#561
+        extractor.vw.makeFunction(0x404970)
 
 
 @lru_cache(maxsize=1)
@@ -278,12 +266,22 @@ def get_data_path_by_name(name):
         return os.path.join(DNFILE_TESTFILES, "hello-world", "hello-world.exe")
     elif name.startswith("_1c444"):
         return os.path.join(CD, "data", "dotnet", "1c444ebeba24dcba8628b7dfe5fec7c6.exe_")
+    elif name.startswith("_387f15"):
+        return os.path.join(
+            CD, "data", "dotnet", "387f15043f0198fd3a637b0758c2b6dde9ead795c3ed70803426fc355731b173.dll_"
+        )
     elif name.startswith("_692f"):
         return os.path.join(CD, "data", "dotnet", "692f7fd6d198e804d6af98eb9e390d61.exe_")
     elif name.startswith("_0953c"):
         return os.path.join(CD, "data", "0953cc3b77ed2974b09e3a00708f88de931d681e2d0cb64afbaf714610beabe6.exe_")
     elif name.startswith("_039a6"):
         return os.path.join(CD, "data", "039a6336d0802a2255669e6867a5679c7eb83313dbc61fb1c7232147379bd304.exe_")
+    elif name.startswith("b5f052"):
+        return os.path.join(CD, "data", "b5f0524e69b3a3cf636c7ac366ca57bf5e3a8fdc8a9f01caf196c611a7918a87.elf_")
+    elif name.startswith("bf7a9c"):
+        return os.path.join(CD, "data", "bf7a9c8bdfa6d47e01ad2b056264acc3fd90cf43fe0ed8deec93ab46b47d76cb.elf_")
+    elif name.startswith("294b8d"):
+        return os.path.join(CD, "data", "294b8db1f2702b60fb2e42fdc50c2cee6a5046112da9a5703a548a4fa50477bc.elf_")
     else:
         raise ValueError("unexpected sample fixture: %s" % name)
 
@@ -634,6 +632,8 @@ FEATURE_PRESENCE_TESTS = sorted(
         ("mimikatz", "function=0x40105D", capa.features.common.String("ACR  > "), True),
         ("mimikatz", "function=0x40105D", capa.features.common.String("nope"), False),
         ("773290...", "function=0x140001140", capa.features.common.String(r"%s:\\OfficePackagesForWDAG"), True),
+        # overlapping string, see #1271
+        ("294b8d...", "function=0x404970,bb=0x404970,insn=0x40499F", capa.features.common.String("\r\n\x00:ht"), False),
         # insn/regex
         ("pma16-01", "function=0x4021B0", capa.features.common.Regex("HTTP/1.0"), True),
         ("pma16-01", "function=0x402F40", capa.features.common.Regex("www.practicalmalwareanalysis.com"), True),
@@ -689,14 +689,22 @@ FEATURE_PRESENCE_TESTS = sorted(
         # os & format & arch
         ("pma16-01", "file", OS(OS_WINDOWS), True),
         ("pma16-01", "file", OS(OS_LINUX), False),
+        ("mimikatz", "file", OS(OS_WINDOWS), True),
         ("pma16-01", "function=0x404356", OS(OS_WINDOWS), True),
         ("pma16-01", "function=0x404356,bb=0x4043B9", OS(OS_WINDOWS), True),
+        ("mimikatz", "function=0x40105D", OS(OS_WINDOWS), True),
         ("pma16-01", "file", Arch(ARCH_I386), True),
         ("pma16-01", "file", Arch(ARCH_AMD64), False),
+        ("mimikatz", "file", Arch(ARCH_I386), True),
         ("pma16-01", "function=0x404356", Arch(ARCH_I386), True),
         ("pma16-01", "function=0x404356,bb=0x4043B9", Arch(ARCH_I386), True),
+        ("mimikatz", "function=0x40105D", Arch(ARCH_I386), True),
         ("pma16-01", "file", Format(FORMAT_PE), True),
         ("pma16-01", "file", Format(FORMAT_ELF), False),
+        ("mimikatz", "file", Format(FORMAT_PE), True),
+        # format is also a global feature
+        ("pma16-01", "function=0x404356", Format(FORMAT_PE), True),
+        ("mimikatz", "function=0x456BB9", Format(FORMAT_PE), True),
         # elf support
         ("7351f.elf", "file", OS(OS_LINUX), True),
         ("7351f.elf", "file", OS(OS_WINDOWS), False),
@@ -723,6 +731,7 @@ FEATURE_PRESENCE_TESTS_DOTNET = sorted(
         ("mixed-mode-64", "file", capa.features.common.Characteristic("mixed mode"), True),
         ("hello-world", "file", capa.features.common.Characteristic("mixed mode"), False),
         ("b9f5b", "file", OS(OS_ANY), True),
+        ("b9f5b", "file", Format(FORMAT_PE), True),
         ("b9f5b", "file", Format(FORMAT_DOTNET), True),
         ("hello-world", "file", capa.features.file.FunctionName("HelloWorld::Main"), True),
         ("hello-world", "file", capa.features.file.FunctionName("HelloWorld::ctor"), True),
@@ -745,8 +754,23 @@ FEATURE_PRESENCE_TESTS_DOTNET = sorted(
         ("_1c444", "function=0x1F68", capa.features.insn.API("GetWindowDC"), True),
         ("_1c444", "function=0x1F68", capa.features.insn.API("user32.GetWindowDC"), True),
         ("_1c444", "function=0x1F68", capa.features.insn.Number(0xCC0020), True),
+        ("_1c444", "token=0x600001D", capa.features.common.Characteristic("calls to"), True),
+        ("_1c444", "token=0x6000018", capa.features.common.Characteristic("calls to"), False),
+        ("_1c444", "token=0x600001D", capa.features.common.Characteristic("calls from"), True),
+        ("_1c444", "token=0x600000F", capa.features.common.Characteristic("calls from"), False),
         ("_1c444", "function=0x1F68", capa.features.insn.Number(0x0), True),
         ("_1c444", "function=0x1F68", capa.features.insn.Number(0x1), False),
+        ("_692f", "token=0x6000004", capa.features.insn.API("System.Linq.Enumerable::First"), True),  # generic method
+        (
+            "_692f",
+            "token=0x6000004",
+            capa.features.insn.Property("System.Linq.Enumerable::First"),
+            False,
+        ),  # generic method
+        ("_692f", "token=0x6000004", capa.features.common.Namespace("System.Linq"), True),  # generic method
+        ("_692f", "token=0x6000004", capa.features.common.Class("System.Linq.Enumerable"), True),  # generic method
+        ("_1c444", "token=0x6000020", capa.features.common.Namespace("Reqss"), True),  # ldftn
+        ("_1c444", "token=0x6000020", capa.features.common.Class("Reqss.Reqss"), True),  # ldftn
         (
             "_1c444",
             "function=0x1F59, bb=0x1F59, insn=0x1F5B",
@@ -768,25 +792,25 @@ FEATURE_PRESENCE_TESTS_DOTNET = sorted(
             "token=0x600002B",
             capa.features.insn.Property("System.IO.FileInfo::Length", access=FeatureAccess.READ),
             True,
-        ),  # MemberRef method
+        ),  # MemberRef property access
         (
             "_1c444",
             "token=0x600002B",
             capa.features.insn.Property("System.IO.FileInfo::Length"),
             True,
-        ),  # MemberRef method
+        ),  # MemberRef property access
         (
             "_1c444",
             "token=0x6000081",
             capa.features.insn.API("System.Diagnostics.Process::Start"),
             True,
-        ),  # MemberRef method
+        ),  # MemberRef property access
         (
             "_1c444",
             "token=0x6000081",
             capa.features.insn.Property(
                 "System.Diagnostics.ProcessStartInfo::UseShellExecute", access=FeatureAccess.WRITE
-            ),  # MemberRef method
+            ),  # MemberRef property access
             True,
         ),
         (
@@ -794,7 +818,7 @@ FEATURE_PRESENCE_TESTS_DOTNET = sorted(
             "token=0x6000081",
             capa.features.insn.Property(
                 "System.Diagnostics.ProcessStartInfo::WorkingDirectory", access=FeatureAccess.WRITE
-            ),  # MemberRef method
+            ),  # MemberRef property access
             True,
         ),
         (
@@ -802,40 +826,95 @@ FEATURE_PRESENCE_TESTS_DOTNET = sorted(
             "token=0x6000081",
             capa.features.insn.Property(
                 "System.Diagnostics.ProcessStartInfo::FileName", access=FeatureAccess.WRITE
-            ),  # MemberRef method
+            ),  # MemberRef property access
             True,
         ),
         (
             "_1c444",
             "token=0x6000087",
-            capa.features.insn.Property("Sockets.MySocket::reConnectionDelay", access=FeatureAccess.WRITE),  # Field
+            capa.features.insn.Property(
+                "Sockets.MySocket::reConnectionDelay", access=FeatureAccess.WRITE
+            ),  # Field property access
             True,
         ),
         (
             "_1c444",
             "token=0x600008A",
-            capa.features.insn.Property("Sockets.MySocket::isConnected", access=FeatureAccess.WRITE),  # Field
+            capa.features.insn.Property(
+                "Sockets.MySocket::isConnected", access=FeatureAccess.WRITE
+            ),  # Field property access
             True,
         ),
         (
             "_1c444",
             "token=0x600008A",
-            capa.features.insn.Property("Sockets.MySocket::onConnected", access=FeatureAccess.READ),  # Field
+            capa.features.common.Class("Sockets.MySocket"),  # Field property access
+            True,
+        ),
+        (
+            "_1c444",
+            "token=0x600008A",
+            capa.features.common.Namespace("Sockets"),  # Field property access
+            True,
+        ),
+        (
+            "_1c444",
+            "token=0x600008A",
+            capa.features.insn.Property(
+                "Sockets.MySocket::onConnected", access=FeatureAccess.READ
+            ),  # Field property access
             True,
         ),
         (
             "_0953c",
             "token=0x6000004",
-            capa.features.insn.Property("System.Diagnostics.Debugger::IsAttached", access=FeatureAccess.READ),
+            capa.features.insn.Property(
+                "System.Diagnostics.Debugger::IsAttached", access=FeatureAccess.READ
+            ),  # MemberRef property access
             True,
-        ),  # MemberRef method
+        ),
+        (
+            "_0953c",
+            "token=0x6000004",
+            capa.features.common.Class("System.Diagnostics.Debugger"),  # MemberRef property access
+            True,
+        ),
+        (
+            "_0953c",
+            "token=0x6000004",
+            capa.features.common.Namespace("System.Diagnostics"),  # MemberRef property access
+            True,
+        ),
         (
             "_692f",
             "token=0x6000006",
             capa.features.insn.Property(
                 "System.Management.Automation.PowerShell::Streams", access=FeatureAccess.READ
-            ),  # MemberRef method
+            ),  # MemberRef property access
             False,
+        ),
+        (
+            "_387f15",
+            "token=0x600009E",
+            capa.features.insn.Property(
+                "Modulo.IqQzcRDvSTulAhyLtZHqyeYGgaXGbuLwhxUKXYmhtnOmgpnPJDTSIPhYPpnE::geoplugin_countryCode",
+                access=FeatureAccess.READ,
+            ),  # MethodDef property access
+            True,
+        ),
+        (
+            "_387f15",
+            "token=0x600009E",
+            capa.features.common.Class(
+                "Modulo.IqQzcRDvSTulAhyLtZHqyeYGgaXGbuLwhxUKXYmhtnOmgpnPJDTSIPhYPpnE"
+            ),  # MethodDef property access
+            True,
+        ),
+        (
+            "_387f15",
+            "token=0x600009E",
+            capa.features.common.Namespace("Modulo"),  # MethodDef property access
+            True,
         ),
         (
             "_039a6",
@@ -884,7 +963,10 @@ FEATURE_COUNT_TESTS = [
 ]
 
 
-FEATURE_COUNT_TESTS_DOTNET = []  # type: ignore
+FEATURE_COUNT_TESTS_DOTNET = [
+    ("_1c444", "token=0x600001D", capa.features.common.Characteristic("calls to"), 1),
+    ("_1c444", "token=0x600001D", capa.features.common.Characteristic("calls from"), 9),
+]
 
 
 def do_test_feature_presence(get_extractor, sample, scope, feature, expected):

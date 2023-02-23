@@ -4,7 +4,18 @@ from typing import Tuple, Iterator
 import dnfile
 import pefile
 
-from capa.features.common import OS, OS_ANY, ARCH_ANY, ARCH_I386, ARCH_AMD64, FORMAT_DOTNET, Arch, Format, Feature
+from capa.features.common import (
+    OS,
+    OS_ANY,
+    ARCH_ANY,
+    ARCH_I386,
+    FORMAT_PE,
+    ARCH_AMD64,
+    FORMAT_DOTNET,
+    Arch,
+    Format,
+    Feature,
+)
 from capa.features.address import NO_ADDRESS, Address, AbsoluteVirtualAddress
 from capa.features.extractors.base_extractor import FeatureExtractor
 
@@ -12,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def extract_file_format(**kwargs) -> Iterator[Tuple[Feature, Address]]:
+    yield Format(FORMAT_PE), NO_ADDRESS
     yield Format(FORMAT_DOTNET), NO_ADDRESS
 
 
@@ -19,9 +31,12 @@ def extract_file_os(**kwargs) -> Iterator[Tuple[Feature, Address]]:
     yield OS(OS_ANY), NO_ADDRESS
 
 
-def extract_file_arch(pe, **kwargs) -> Iterator[Tuple[Feature, Address]]:
+def extract_file_arch(pe: dnfile.dnPE, **kwargs) -> Iterator[Tuple[Feature, Address]]:
     # to distinguish in more detail, see https://stackoverflow.com/a/23614024/10548020
     # .NET 4.5 added option: any CPU, 32-bit preferred
+    assert pe.net is not None
+    assert pe.net.Flags is not None
+
     if pe.net.Flags.CLR_32BITREQUIRED and pe.PE_TYPE == pefile.OPTIONAL_HEADER_MAGIC_PE:
         yield Arch(ARCH_I386), NO_ADDRESS
     elif not pe.net.Flags.CLR_32BITREQUIRED and pe.PE_TYPE == pefile.OPTIONAL_HEADER_MAGIC_PE_PLUS:
@@ -60,7 +75,7 @@ GLOBAL_HANDLERS = (
 
 class DnfileFeatureExtractor(FeatureExtractor):
     def __init__(self, path: str):
-        super(DnfileFeatureExtractor, self).__init__()
+        super().__init__()
         self.path: str = path
         self.pe: dnfile.dnPE = dnfile.dnPE(path)
 
@@ -71,6 +86,9 @@ class DnfileFeatureExtractor(FeatureExtractor):
         # self.pe.net.Flags.CLT_NATIVE_ENTRYPOINT
         #  True: native EP: Token
         #  False: managed EP: RVA
+        assert self.pe.net is not None
+        assert self.pe.net.struct is not None
+
         return self.pe.net.struct.EntryPointTokenOrRva
 
     def extract_global_features(self):
@@ -83,13 +101,29 @@ class DnfileFeatureExtractor(FeatureExtractor):
         return bool(self.pe.net)
 
     def is_mixed_mode(self) -> bool:
+        assert self.pe is not None
+        assert self.pe.net is not None
+        assert self.pe.net.Flags is not None
+
         return not bool(self.pe.net.Flags.CLR_ILONLY)
 
     def get_runtime_version(self) -> Tuple[int, int]:
+        assert self.pe is not None
+        assert self.pe.net is not None
+        assert self.pe.net.struct is not None
+
         return self.pe.net.struct.MajorRuntimeVersion, self.pe.net.struct.MinorRuntimeVersion
 
     def get_meta_version_string(self) -> str:
-        return self.pe.net.metadata.struct.Version.rstrip(b"\x00").decode("utf-8")
+        assert self.pe.net is not None
+        assert self.pe.net.metadata is not None
+        assert self.pe.net.metadata.struct is not None
+        assert self.pe.net.metadata.struct.Version is not None
+
+        vbuf = self.pe.net.metadata.struct.Version
+        assert isinstance(vbuf, bytes)
+
+        return vbuf.rstrip(b"\x00").decode("utf-8")
 
     def get_functions(self):
         raise NotImplementedError("DnfileFeatureExtractor can only be used to extract file features")

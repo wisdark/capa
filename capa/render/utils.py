@@ -24,12 +24,8 @@ def bold2(s: str) -> str:
     return termcolor.colored(s, "green")
 
 
-def hex(n: int) -> str:
-    """render the given number using upper case hex, like: 0x123ABC"""
-    if n < 0:
-        return "-0x%X" % (-n)
-    else:
-        return "0x%X" % n
+def warn(s: str) -> str:
+    return termcolor.colored(s, "yellow")
 
 
 def format_parts_id(data: Union[rd.AttackSpec, rd.MBCSpec]):
@@ -41,7 +37,7 @@ def format_parts_id(data: Union[rd.AttackSpec, rd.MBCSpec]):
 
 def capability_rules(doc: rd.ResultDocument) -> Iterator[rd.RuleMatches]:
     """enumerate the rules in (namespace, name) order that are 'capability' rules (not lib/subscope/disposition/etc)."""
-    for (_, _, rule) in sorted(map(lambda rule: (rule.meta.namespace or "", rule.meta.name, rule), doc.rules.values())):
+    for _, _, rule in sorted(map(lambda rule: (rule.meta.namespace or "", rule.meta.name, rule), doc.rules.values())):
         if rule.meta.lib:
             continue
         if rule.meta.is_subscope_rule:

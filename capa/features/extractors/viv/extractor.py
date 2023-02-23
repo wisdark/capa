@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 class VivisectFeatureExtractor(FeatureExtractor):
     def __init__(self, vw, path):
-        super(VivisectFeatureExtractor, self).__init__()
+        super().__init__()
         self.vw = vw
         self.path = path
         with open(self.path, "rb") as f:
@@ -34,6 +34,7 @@ class VivisectFeatureExtractor(FeatureExtractor):
 
         # pre-compute these because we'll yield them at *every* scope.
         self.global_features: List[Tuple[Feature, Address]] = []
+        self.global_features.extend(capa.features.extractors.viv.file.extract_file_format(self.buf))
         self.global_features.extend(capa.features.extractors.common.extract_os(self.buf))
         self.global_features.extend(capa.features.extractors.viv.global_.extract_arch(self.vw))
 

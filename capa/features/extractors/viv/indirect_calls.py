@@ -42,7 +42,7 @@ def get_previous_instructions(vw: VivWorkspace, va: int) -> List[int]:
     ret = []
 
     # find the immediate prior instruction.
-    # ensure that it fallsthrough to this one.
+    # ensure that it falls through to this one.
     loc = vw.getPrevLocation(va, adjacent=True)
     if loc is not None:
         ploc = vw.getPrevLocation(va, adjacent=True)
@@ -59,7 +59,7 @@ def get_previous_instructions(vw: VivWorkspace, va: int) -> List[int]:
     #
     # from vivisect.const:
     # xref: (XR_FROM, XR_TO, XR_RTYPE, XR_RFLAG)
-    for (xfrom, _, _, xflag) in vw.getXrefsTo(va, REF_CODE):
+    for xfrom, _, _, xflag in vw.getXrefsTo(va, REF_CODE):
         if (xflag & FAR_BRANCH_MASK) != 0:
             continue
         ret.append(xfrom)

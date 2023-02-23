@@ -248,7 +248,7 @@ class InvalidAttckOrMbcTechnique(Lint):
     """
 
     def __init__(self):
-        super(InvalidAttckOrMbcTechnique, self).__init__()
+        super().__init__()
 
         try:
             with open(f"{os.path.dirname(__file__)}/linter-data.json", "rb") as fd:
@@ -307,11 +307,7 @@ def get_sample_capabilities(ctx: Context, path: Path) -> Set[str]:
     elif nice_path.endswith(capa.helpers.EXTENSIONS_SHELLCODE_64):
         format_ = "sc64"
     else:
-        format_ = "auto"
-        if not nice_path.endswith(capa.helpers.EXTENSIONS_ELF):
-            dnfile_extractor = capa.features.extractors.dnfile_.DnfileFeatureExtractor(nice_path)
-            if dnfile_extractor.is_dotnet_file():
-                format_ = FORMAT_DOTNET
+        format_ = capa.main.get_auto_format(nice_path)
 
     logger.debug("analyzing sample: %s", nice_path)
     extractor = capa.main.get_extractor(nice_path, format_, "", DEFAULT_SIGNATURES, False, disable_progress=True)
@@ -894,7 +890,6 @@ def redirecting_print_to_tqdm():
     old_print = print
 
     def new_print(*args, **kwargs):
-
         # If tqdm.tqdm.write raises error, use builtin print
         try:
             tqdm.tqdm.write(*args, **kwargs)
@@ -902,11 +897,15 @@ def redirecting_print_to_tqdm():
             old_print(*args, **kwargs)
 
     try:
-        # Globaly replace print with new_print
-        inspect.builtins.print = new_print
+        # Globally replace print with new_print.
+        # Verified this works manually on Python 3.11:
+        #     >>> import inspect
+        #     >>> inspect.builtins
+        #     <module 'builtins' (built-in)>
+        inspect.builtins.print = new_print  # type: ignore
         yield
     finally:
-        inspect.builtins.print = old_print
+        inspect.builtins.print = old_print  # type: ignore
 
 
 def lint(ctx: Context):
@@ -917,12 +916,11 @@ def lint(ctx: Context):
     """
     ret = {}
 
-    with tqdm.contrib.logging.tqdm_logging_redirect(ctx.rules.rules.items(), unit="rule") as pbar:
+    source_rules = [rule for rule in ctx.rules.rules.values() if not rule.is_subscope_rule()]
+    with tqdm.contrib.logging.tqdm_logging_redirect(source_rules, unit="rule") as pbar:
         with redirecting_print_to_tqdm():
-            for name, rule in pbar:
-                if rule.is_subscope_rule():
-                    continue
-
+            for rule in pbar:
+                name = rule.name
                 pbar.set_description(width("linting rule: %s" % (name), 48))
                 ret[name] = lint_rule(ctx, rule)
 
@@ -998,10 +996,8 @@ def main(argv=None):
     time0 = time.time()
 
     try:
-        rules = capa.main.get_rules(args.rules, disable_progress=True)
-        rule_count = len(rules)
-        rules = capa.rules.RuleSet(rules)
-        logger.info("successfully loaded %s rules", rule_count)
+        rules = capa.main.get_rules(args.rules)
+        logger.info("successfully loaded %s rules", rules.source_rule_count)
         if args.tag:
             rules = rules.filter_rules_by_meta(args.tag)
             logger.debug("selected %s rules", len(rules))

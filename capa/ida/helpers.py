@@ -5,20 +5,25 @@
 # Unless required by applicable law or agreed to in writing, software distributed under the License
 #  is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and limitations under the License.
-
+import json
 import logging
 import datetime
 import contextlib
+from typing import Optional
 
 import idc
 import idaapi
 import idautils
 import ida_bytes
 import ida_loader
+from netnode import netnode
 
 import capa
 import capa.version
+import capa.render.utils as rutils
 import capa.features.common
+import capa.render.result_document
+from capa.features.address import AbsoluteVirtualAddress
 
 logger = logging.getLogger("capa")
 
@@ -27,11 +32,16 @@ SUPPORTED_FILE_TYPES = (
     idaapi.f_PE,
     idaapi.f_ELF,
     idaapi.f_BIN,
+    idaapi.f_COFF,
     # idaapi.f_MACHO,
 )
 
 # arch type as returned by idainfo.procname
 SUPPORTED_ARCH_TYPES = ("metapc",)
+
+CAPA_NETNODE = f"$ com.mandiant.capa.v{capa.version.__version__}"
+NETNODE_RESULTS = "results"
+NETNODE_RULES_CACHE_ID = "rules-cache-id"
 
 
 def inform_user_ida_ui(message):
@@ -170,7 +180,7 @@ class IDAIO:
     """
 
     def __init__(self):
-        super(IDAIO, self).__init__()
+        super().__init__()
         self.offset = 0
 
     def seek(self, offset, whence=0):
@@ -180,11 +190,63 @@ class IDAIO:
     def read(self, size):
         ea = ida_loader.get_fileregion_ea(self.offset)
         if ea == idc.BADADDR:
-            # best guess, such as if file is mapped at address 0x0.
-            ea = self.offset
+            logger.debug("cannot read 0x%x bytes at 0x%x (ea: BADADDR)", size, self.offset)
+            return b""
 
         logger.debug("reading 0x%x bytes at 0x%x (ea: 0x%x)", size, self.offset, ea)
-        return ida_bytes.get_bytes(ea, size)
+
+        # get_bytes returns None on error, for consistency with read always return bytes
+        return ida_bytes.get_bytes(ea, size) or b""
 
     def close(self):
         return
+
+
+def save_cached_results(resdoc):
+    logger.debug("saving cached capa results to netnode '%s'", CAPA_NETNODE)
+    n = netnode.Netnode(CAPA_NETNODE)
+    n[NETNODE_RESULTS] = resdoc.json()
+
+
+def idb_contains_cached_results() -> bool:
+    try:
+        n = netnode.Netnode(CAPA_NETNODE)
+        return bool(n.get(NETNODE_RESULTS))
+    except netnode.NetnodeCorruptError as e:
+        logger.error("%s", e, exc_info=True)
+        return False
+
+
+def load_and_verify_cached_results() -> Optional[capa.render.result_document.ResultDocument]:
+    """verifies that cached results have valid (mapped) addresses for the current database"""
+    logger.debug("loading cached capa results from netnode '%s'", CAPA_NETNODE)
+
+    n = netnode.Netnode(CAPA_NETNODE)
+    doc = capa.render.result_document.ResultDocument.parse_obj(json.loads(n[NETNODE_RESULTS]))
+
+    for rule in rutils.capability_rules(doc):
+        for location_, _ in rule.matches:
+            location = location_.to_capa()
+            if isinstance(location, AbsoluteVirtualAddress):
+                ea = int(location)
+                if not idaapi.is_mapped(ea):
+                    logger.error("cached address %s is not a valid location in this database", hex(ea))
+                    return None
+    return doc
+
+
+def save_rules_cache_id(ruleset_id):
+    logger.debug("saving ruleset ID to netnode '%s'", CAPA_NETNODE)
+    n = netnode.Netnode(CAPA_NETNODE)
+    n[NETNODE_RULES_CACHE_ID] = ruleset_id
+
+
+def load_rules_cache_id():
+    n = netnode.Netnode(CAPA_NETNODE)
+    return n[NETNODE_RULES_CACHE_ID]
+
+
+def delete_cached_results():
+    logger.debug("deleting cached capa data")
+    n = netnode.Netnode(CAPA_NETNODE)
+    del n[NETNODE_RESULTS]

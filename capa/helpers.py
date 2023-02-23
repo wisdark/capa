@@ -10,7 +10,7 @@ import logging
 from typing import NoReturn
 
 from capa.exceptions import UnsupportedFormatError
-from capa.features.common import FORMAT_SC32, FORMAT_SC64, FORMAT_UNKNOWN
+from capa.features.common import FORMAT_PE, FORMAT_SC32, FORMAT_SC64, FORMAT_DOTNET, FORMAT_UNKNOWN, Format
 
 EXTENSIONS_SHELLCODE_32 = ("sc32", "raw32")
 EXTENSIONS_SHELLCODE_64 = ("sc64", "raw64")
@@ -18,11 +18,13 @@ EXTENSIONS_ELF = "elf_"
 
 logger = logging.getLogger("capa")
 
-_hex = hex
 
-
-def hex(i):
-    return _hex(int(i))
+def hex(n: int) -> str:
+    """render the given number using upper case hex, like: 0x123ABC"""
+    if n < 0:
+        return "-0x%X" % (-n)
+    else:
+        return "0x%X" % n
 
 
 def get_file_taste(sample_path: str) -> bytes:
@@ -66,11 +68,17 @@ def get_auto_format(path: str) -> str:
 def get_format(sample: str) -> str:
     # imported locally to avoid import cycle
     from capa.features.extractors.common import extract_format
+    from capa.features.extractors.dnfile_ import DnfileFeatureExtractor
 
     with open(sample, "rb") as f:
         buf = f.read()
 
     for feature, _ in extract_format(buf):
+        if feature == Format(FORMAT_PE):
+            dnfile_extractor = DnfileFeatureExtractor(sample)
+            if dnfile_extractor.is_dotnet_file():
+                feature = Format(FORMAT_DOTNET)
+
         assert isinstance(feature.value, str)
         return feature.value
 

@@ -6,15 +6,8 @@
 #  is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and limitations under the License.
 
-from capa.features.common import Feature
 
+class UserCancelledError(Exception):
+    """throw exception when user cancels action"""
 
-class BasicBlock(Feature):
-    def __init__(self, description=None):
-        super().__init__(0, description=description)
-
-    def __str__(self):
-        return "basic block"
-
-    def get_value_str(self):
-        return ""
+    pass
