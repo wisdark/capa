@@ -1,5 +1,13 @@
+# Copyright (C) 2022 Mandiant, Inc. All Rights Reserved.
+# Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at: [package root]/LICENSE.txt
+# Unless required by applicable law or agreed to in writing, software distributed under the License
+#  is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and limitations under the License.
 import logging
-from typing import Tuple, Iterator, cast
+from typing import Tuple, Iterator
+from pathlib import Path
 
 import dnfile
 import pefile
@@ -23,23 +31,26 @@ from capa.features.common import (
     Characteristic,
 )
 from capa.features.address import NO_ADDRESS, Address, DNTokenAddress
-from capa.features.extractors.base_extractor import FeatureExtractor
+from capa.features.extractors.dnfile.types import DnType
+from capa.features.extractors.base_extractor import SampleHashes, StaticFeatureExtractor
 from capa.features.extractors.dnfile.helpers import (
-    DnType,
     iter_dotnet_table,
     is_dotnet_mixed_mode,
     get_dotnet_managed_imports,
     get_dotnet_managed_methods,
+    resolve_nested_typedef_name,
+    resolve_nested_typeref_name,
     calculate_dotnet_token_value,
     get_dotnet_unmanaged_imports,
+    get_dotnet_nested_class_table_index,
 )
 
 logger = logging.getLogger(__name__)
 
 
 def extract_file_format(**kwargs) -> Iterator[Tuple[Format, Address]]:
-    yield Format(FORMAT_PE), NO_ADDRESS
     yield Format(FORMAT_DOTNET), NO_ADDRESS
+    yield Format(FORMAT_PE), NO_ADDRESS
 
 
 def extract_file_import_names(pe: dnfile.dnPE, **kwargs) -> Iterator[Tuple[Import, Address]]:
@@ -49,7 +60,7 @@ def extract_file_import_names(pe: dnfile.dnPE, **kwargs) -> Iterator[Tuple[Impor
 
     for imp in get_dotnet_unmanaged_imports(pe):
         # like kernel32.CreateFileA
-        for name in capa.features.extractors.helpers.generate_symbols(imp.module, imp.method):
+        for name in capa.features.extractors.helpers.generate_symbols(imp.module, imp.method, include_dll=True):
             yield Import(name), DNTokenAddress(imp.token)
 
 
@@ -67,12 +78,12 @@ def extract_file_namespace_features(pe: dnfile.dnPE, **kwargs) -> Iterator[Tuple
     for _, typedef in iter_dotnet_table(pe, dnfile.mdtable.TypeDef.number):
         # emit internal .NET namespaces
         assert isinstance(typedef, dnfile.mdtable.TypeDefRow)
-        namespaces.add(typedef.TypeNamespace)
+        namespaces.add(str(typedef.TypeNamespace))
 
     for _, typeref in iter_dotnet_table(pe, dnfile.mdtable.TypeRef.number):
         # emit external .NET namespaces
         assert isinstance(typeref, dnfile.mdtable.TypeRefRow)
-        namespaces.add(typeref.TypeNamespace)
+        namespaces.add(str(typeref.TypeNamespace))
 
     # namespaces may be empty, discard
     namespaces.discard("")
@@ -84,19 +95,25 @@ def extract_file_namespace_features(pe: dnfile.dnPE, **kwargs) -> Iterator[Tuple
 
 def extract_file_class_features(pe: dnfile.dnPE, **kwargs) -> Iterator[Tuple[Class, Address]]:
     """emit class features from TypeRef and TypeDef tables"""
+    nested_class_table = get_dotnet_nested_class_table_index(pe)
+
     for rid, typedef in iter_dotnet_table(pe, dnfile.mdtable.TypeDef.number):
         # emit internal .NET classes
         assert isinstance(typedef, dnfile.mdtable.TypeDefRow)
 
+        typedefnamespace, typedefname = resolve_nested_typedef_name(nested_class_table, rid, typedef, pe)
+
         token = calculate_dotnet_token_value(dnfile.mdtable.TypeDef.number, rid)
-        yield Class(DnType.format_name(typedef.TypeName, namespace=typedef.TypeNamespace)), DNTokenAddress(token)
+        yield Class(DnType.format_name(typedefname, namespace=typedefnamespace)), DNTokenAddress(token)
 
     for rid, typeref in iter_dotnet_table(pe, dnfile.mdtable.TypeRef.number):
         # emit external .NET classes
         assert isinstance(typeref, dnfile.mdtable.TypeRefRow)
 
+        typerefnamespace, typerefname = resolve_nested_typeref_name(typeref.ResolutionScope.row_index, typeref, pe)
+
         token = calculate_dotnet_token_value(dnfile.mdtable.TypeRef.number, rid)
-        yield Class(DnType.format_name(typeref.TypeName, namespace=typeref.TypeNamespace)), DNTokenAddress(token)
+        yield Class(DnType.format_name(typerefname, namespace=typerefnamespace)), DNTokenAddress(token)
 
 
 def extract_file_os(**kwargs) -> Iterator[Tuple[OS, Address]]:
@@ -157,11 +174,11 @@ GLOBAL_HANDLERS = (
 )
 
 
-class DotnetFileFeatureExtractor(FeatureExtractor):
-    def __init__(self, path: str):
-        super().__init__()
-        self.path: str = path
-        self.pe: dnfile.dnPE = dnfile.dnPE(path)
+class DotnetFileFeatureExtractor(StaticFeatureExtractor):
+    def __init__(self, path: Path):
+        super().__init__(hashes=SampleHashes.from_bytes(path.read_bytes()))
+        self.path: Path = path
+        self.pe: dnfile.dnPE = dnfile.dnPE(str(path))
 
     def get_base_address(self):
         return NO_ADDRESS

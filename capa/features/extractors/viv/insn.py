@@ -22,6 +22,7 @@ import capa.features.extractors.viv.helpers
 from capa.features.insn import API, MAX_STRUCTURE_SIZE, Number, Offset, Mnemonic, OperandNumber, OperandOffset
 from capa.features.common import MAX_BYTES_FEATURE_SIZE, THUNK_CHAIN_DEPTH_DELTA, Bytes, String, Feature, Characteristic
 from capa.features.address import Address, AbsoluteVirtualAddress
+from capa.features.extractors.elf import SymTab
 from capa.features.extractors.base_extractor import BBHandle, InsnHandle, FunctionHandle
 from capa.features.extractors.viv.indirect_calls import NotFoundError, resolve_indirect_call
 
@@ -109,6 +110,26 @@ def extract_insn_api_features(fh: FunctionHandle, bb, ih: InsnHandle) -> Iterato
         if not target:
             return
 
+        if f.vw.metadata["Format"] == "elf":
+            if "symtab" not in fh.ctx["cache"]:
+                # the symbol table gets stored as a function's attribute in order to avoid running
+                # this code every time the call is made, thus preventing the computational overhead.
+                try:
+                    fh.ctx["cache"]["symtab"] = SymTab.from_viv(f.vw.parsedbin)
+                except Exception:
+                    fh.ctx["cache"]["symtab"] = None
+
+            symtab = fh.ctx["cache"]["symtab"]
+            if symtab:
+                for symbol in symtab.get_symbols():
+                    sym_name = symtab.get_name(symbol)
+                    sym_value = symbol.value
+                    sym_info = symbol.info
+
+                    STT_FUNC = 0x2
+                    if sym_value == target and sym_info & STT_FUNC != 0:
+                        yield API(sym_name), ih.address
+
         if viv_utils.flirt.is_library_function(f.vw, target):
             name = viv_utils.get_function_name(f.vw, target)
             yield API(name), ih.address
@@ -175,7 +196,12 @@ def derefs(vw, p):
     while True:
         if not vw.isValidPointer(p):
             return
+
         yield p
+
+        if vw.isProbablyString(p) or vw.isProbablyUnicode(p):
+            # don't deref strings that coincidentally are pointers
+            return
 
         try:
             next = vw.readMemoryPtr(p)
@@ -262,16 +288,16 @@ def extract_insn_bytes_features(fh: FunctionHandle, bb, ih: InsnHandle) -> Itera
         else:
             continue
 
-        for v in derefs(f.vw, v):
+        for vv in derefs(f.vw, v):
             try:
-                buf = read_bytes(f.vw, v)
+                buf = read_bytes(f.vw, vv)
             except envi.exc.SegmentationViolation:
                 continue
 
             if capa.features.extractors.helpers.all_zeros(buf):
                 continue
 
-            if f.vw.isProbablyString(v):
+            if f.vw.isProbablyString(vv) or f.vw.isProbablyUnicode(vv):
                 # don't extract byte features for obvious strings
                 continue
 
@@ -325,7 +351,6 @@ def is_security_cookie(f, bb, insn) -> bool:
     if oper.isReg() and oper.reg not in [
         envi.archs.i386.regs.REG_ESP,
         envi.archs.i386.regs.REG_EBP,
-        # TODO: do x64 support for real.
         envi.archs.amd64.regs.REG_RBP,
         envi.archs.amd64.regs.REG_RSP,
     ]:
@@ -385,9 +410,7 @@ def extract_insn_obfs_call_plus_5_characteristic_features(f, bb, ih: InsnHandle)
         if insn.va + 5 == insn.opers[0].getOperValue(insn):
             yield Characteristic("call $+5"), ih.address
 
-    if isinstance(insn.opers[0], envi.archs.i386.disasm.i386ImmMemOper) or isinstance(
-        insn.opers[0], envi.archs.amd64.disasm.Amd64RipRelOper
-    ):
+    if isinstance(insn.opers[0], (envi.archs.i386.disasm.i386ImmMemOper, envi.archs.amd64.disasm.Amd64RipRelOper)):
         if insn.va + 5 == insn.opers[0].getOperAddr(insn):
             yield Characteristic("call $+5"), ih.address
 
@@ -396,7 +419,6 @@ def extract_insn_peb_access_characteristic_features(f, bb, ih: InsnHandle) -> It
     """
     parse peb access from the given function. fs:[0x30] on x86, gs:[0x60] on x64
     """
-    # TODO handle where fs/gs are loaded into a register or onto the stack and used later
     insn: envi.Opcode = ih.inner
 
     if insn.mnem not in ["push", "mov"]:
@@ -576,7 +598,7 @@ def extract_op_number_features(
 
     if f.vw.probeMemory(v, 1, envi.memory.MM_READ):
         # this is a valid address
-        # assume its not also a constant.
+        # assume it's not also a constant.
         return
 
     if insn.mnem == "add" and insn.opers[0].isReg() and insn.opers[0].reg == envi.archs.i386.regs.REG_ESP:
@@ -620,7 +642,6 @@ def extract_op_offset_features(
         if oper.reg == envi.archs.i386.regs.REG_EBP:
             return
 
-        # TODO: do x64 support for real.
         if oper.reg == envi.archs.amd64.regs.REG_RBP:
             return
 
@@ -674,9 +695,9 @@ def extract_op_string_features(
     else:
         return
 
-    for v in derefs(f.vw, v):
+    for vv in derefs(f.vw, v):
         try:
-            s = read_string(f.vw, v).rstrip("\x00")
+            s = read_string(f.vw, vv).rstrip("\x00")
         except ValueError:
             continue
         else:

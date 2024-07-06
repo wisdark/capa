@@ -1,4 +1,4 @@
-# Copyright (C) 2020 Mandiant, Inc. All Rights Reserved.
+# Copyright (C) 2021 Mandiant, Inc. All Rights Reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at: [package root]/LICENSE.txt
@@ -7,6 +7,7 @@
 # See the License for the specific language governing permissions and limitations under the License.
 
 import logging
+from pathlib import Path
 
 import pefile
 
@@ -18,7 +19,7 @@ import capa.features.extractors.strings
 from capa.features.file import Export, Import, Section
 from capa.features.common import OS, ARCH_I386, FORMAT_PE, ARCH_AMD64, OS_WINDOWS, Arch, Format, Characteristic
 from capa.features.address import NO_ADDRESS, FileOffsetAddress, AbsoluteVirtualAddress
-from capa.features.extractors.base_extractor import FeatureExtractor
+from capa.features.extractors.base_extractor import SampleHashes, StaticFeatureExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +40,20 @@ def extract_file_export_names(pe, **kwargs):
                 name = export.name.partition(b"\x00")[0].decode("ascii")
             except UnicodeDecodeError:
                 continue
-            va = base_address + export.address
-            yield Export(name), AbsoluteVirtualAddress(va)
+
+            if export.forwarder is None:
+                va = base_address + export.address
+                yield Export(name), AbsoluteVirtualAddress(va)
+
+            else:
+                try:
+                    forwarded_name = export.forwarder.partition(b"\x00")[0].decode("ascii")
+                except UnicodeDecodeError:
+                    continue
+                forwarded_name = capa.features.extractors.helpers.reformat_forwarded_export_name(forwarded_name)
+                va = base_address + export.address
+                yield Export(forwarded_name), AbsoluteVirtualAddress(va)
+                yield Characteristic("forwarded export"), AbsoluteVirtualAddress(va)
 
 
 def extract_file_import_names(pe, **kwargs):
@@ -64,14 +77,14 @@ def extract_file_import_names(pe, **kwargs):
 
             for imp in dll.imports:
                 if imp.import_by_ordinal:
-                    impname = "#%s" % imp.ordinal
+                    impname = f"#{imp.ordinal}"
                 else:
                     try:
                         impname = imp.name.partition(b"\x00")[0].decode("ascii")
                     except UnicodeDecodeError:
                         continue
 
-                for name in capa.features.extractors.helpers.generate_symbols(modname, impname):
+                for name in capa.features.extractors.helpers.generate_symbols(modname, impname, include_dll=True):
                     yield Import(name), AbsoluteVirtualAddress(imp.address)
 
 
@@ -172,24 +185,22 @@ GLOBAL_HANDLERS = (
 )
 
 
-class PefileFeatureExtractor(FeatureExtractor):
-    def __init__(self, path: str):
-        super().__init__()
-        self.path = path
-        self.pe = pefile.PE(path)
+class PefileFeatureExtractor(StaticFeatureExtractor):
+    def __init__(self, path: Path):
+        super().__init__(hashes=SampleHashes.from_bytes(path.read_bytes()))
+        self.path: Path = path
+        self.pe = pefile.PE(str(path))
 
     def get_base_address(self):
         return AbsoluteVirtualAddress(self.pe.OPTIONAL_HEADER.ImageBase)
 
     def extract_global_features(self):
-        with open(self.path, "rb") as f:
-            buf = f.read()
+        buf = Path(self.path).read_bytes()
 
         yield from extract_global_features(self.pe, buf)
 
     def extract_file_features(self):
-        with open(self.path, "rb") as f:
-            buf = f.read()
+        buf = Path(self.path).read_bytes()
 
         yield from extract_file_features(self.pe, buf)
 

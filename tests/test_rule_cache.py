@@ -1,4 +1,4 @@
-# Copyright (C) 2023 FireEye, Inc. All Rights Reserved.
+# Copyright (C) 2023 Mandiant, Inc. All Rights Reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at: [package root]/LICENSE.txt
@@ -6,8 +6,8 @@
 #  is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and limitations under the License.
 
-import os
 import textwrap
+import contextlib
 
 import capa.rules
 import capa.rules.cache
@@ -20,7 +20,9 @@ R1 = capa.rules.Rule.from_yaml(
             name: test rule
             authors:
                 - user@domain.com
-            scope: function
+            scopes:
+                static: function
+                dynamic: process
             examples:
                 - foo1234
                 - bar5678
@@ -40,7 +42,9 @@ R2 = capa.rules.Rule.from_yaml(
             name: test rule 2
             authors:
                 - user@domain.com
-            scope: function
+            scopes:
+                static: function
+                dynamic: process
             examples:
                 - foo1234
                 - bar5678
@@ -75,13 +79,11 @@ def test_ruleset_cache_save_load():
     cache_dir = capa.rules.cache.get_default_cache_directory()
 
     path = capa.rules.cache.get_cache_path(cache_dir, id)
-    try:
-        os.remove(path)
-    except OSError:
-        pass
+    with contextlib.suppress(OSError):
+        path.unlink()
 
     capa.rules.cache.cache_ruleset(cache_dir, rs)
-    assert os.path.exists(path)
+    assert path.exists()
 
     assert capa.rules.cache.load_cached_ruleset(cache_dir, content) is not None
 
@@ -92,24 +94,22 @@ def test_ruleset_cache_invalid():
     id = capa.rules.cache.compute_cache_identifier(content)
     cache_dir = capa.rules.cache.get_default_cache_directory()
     path = capa.rules.cache.get_cache_path(cache_dir, id)
-    try:
-        os.remove(path)
-    except OSError:
-        pass
+    with contextlib.suppress(OSError):
+        path.unlink()
 
     capa.rules.cache.cache_ruleset(cache_dir, rs)
-    assert os.path.exists(path)
+    assert path.exists()
 
-    with open(path, "rb") as f:
-        buf = f.read()
+    buf = path.read_bytes()
 
     # corrupt the magic header
     buf = b"x" + buf[1:]
 
-    with open(path, "wb") as f:
-        f.write(buf)
+    # write the modified contents back to the file
+    path.write_bytes(buf)
 
-    assert os.path.exists(path)
+    # check if the file still exists
+    assert path.exists()
     assert capa.rules.cache.load_cached_ruleset(cache_dir, content) is None
     # the invalid cache should be deleted
-    assert not os.path.exists(path)
+    assert not path.exists()

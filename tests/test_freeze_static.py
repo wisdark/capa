@@ -1,4 +1,4 @@
-# Copyright (C) 2020 FireEye, Inc. All Rights Reserved.
+# Copyright (C) 2023 Mandiant, Inc. All Rights Reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at: [package root]/LICENSE.txt
@@ -7,8 +7,9 @@
 # See the License for the specific language governing permissions and limitations under the License.
 import textwrap
 from typing import List
+from pathlib import Path
 
-from fixtures import *
+import pytest
 
 import capa.main
 import capa.rules
@@ -20,10 +21,16 @@ import capa.features.freeze
 import capa.features.basicblock
 import capa.features.extractors.null
 import capa.features.extractors.base_extractor
-from capa.features.address import AbsoluteVirtualAddress
+from capa.features.address import Address, AbsoluteVirtualAddress
+from capa.features.extractors.base_extractor import BBHandle, SampleHashes, FunctionHandle
 
-EXTRACTOR = capa.features.extractors.null.NullFeatureExtractor(
+EXTRACTOR = capa.features.extractors.null.NullStaticFeatureExtractor(
     base_address=AbsoluteVirtualAddress(0x401000),
+    sample_hashes=SampleHashes(
+        md5="6eb7ee7babf913d75df3f86c229df9e7",
+        sha1="2a082494519acd5130d5120fa48786df7275fdd7",
+        sha256="0c7d1a34eb9fd55bedbf37ba16e3d5dd8c1dd1d002479cc4af27ef0f82bb4792",
+    ),
     global_features=[],
     file_features=[
         (AbsoluteVirtualAddress(0x402345), capa.features.common.Characteristic("embedded pe")),
@@ -59,7 +66,7 @@ EXTRACTOR = capa.features.extractors.null.NullFeatureExtractor(
 
 
 def addresses(s) -> List[Address]:
-    return list(sorted(map(lambda i: i.address, s)))
+    return sorted(i.address for i in s)
 
 
 def test_null_feature_extractor():
@@ -81,7 +88,9 @@ def test_null_feature_extractor():
                     rule:
                         meta:
                             name: xor loop
-                            scope: basic block
+                            scopes:
+                                static: basic block
+                                dynamic: process
                         features:
                             - and:
                                 - characteristic: tight loop
@@ -102,23 +111,23 @@ def compare_extractors(a, b):
     assert addresses(a.get_functions()) == addresses(b.get_functions())
     for f in a.get_functions():
         assert addresses(a.get_basic_blocks(f)) == addresses(b.get_basic_blocks(f))
-        assert list(sorted(set(a.extract_function_features(f)))) == list(sorted(set(b.extract_function_features(f))))
+        assert sorted(set(a.extract_function_features(f))) == sorted(set(b.extract_function_features(f)))
 
         for bb in a.get_basic_blocks(f):
             assert addresses(a.get_instructions(f, bb)) == addresses(b.get_instructions(f, bb))
-            assert list(sorted(set(a.extract_basic_block_features(f, bb)))) == list(
-                sorted(set(b.extract_basic_block_features(f, bb)))
+            assert sorted(set(a.extract_basic_block_features(f, bb))) == sorted(
+                set(b.extract_basic_block_features(f, bb))
             )
 
             for insn in a.get_instructions(f, bb):
-                assert list(sorted(set(a.extract_insn_features(f, bb, insn)))) == list(
-                    sorted(set(b.extract_insn_features(f, bb, insn)))
+                assert sorted(set(a.extract_insn_features(f, bb, insn))) == sorted(
+                    set(b.extract_insn_features(f, bb, insn))
                 )
 
 
 def test_freeze_str_roundtrip():
-    load = capa.features.freeze.loads
-    dump = capa.features.freeze.dumps
+    load = capa.features.freeze.loads_static
+    dump = capa.features.freeze.dumps_static
     reanimated = load(dump(EXTRACTOR))
     compare_extractors(EXTRACTOR, reanimated)
 
@@ -131,7 +140,7 @@ def test_freeze_bytes_roundtrip():
 
 
 def roundtrip_feature(feature):
-    assert feature == capa.features.freeze.feature_from_capa(feature).to_capa()
+    assert feature == capa.features.freeze.features.feature_from_capa(feature).to_capa()
 
 
 def test_serialize_features():
@@ -171,10 +180,8 @@ def test_freeze_load_sample(tmpdir, request, extractor):
 
     extractor = request.getfixturevalue(extractor)
 
-    with open(o.strpath, "wb") as f:
-        f.write(capa.features.freeze.dump(extractor))
+    Path(o.strpath).write_bytes(capa.features.freeze.dump(extractor))
 
-    with open(o.strpath, "rb") as f:
-        null_extractor = capa.features.freeze.load(f.read())
+    null_extractor = capa.features.freeze.load(Path(o.strpath).read_bytes())
 
     compare_extractors(extractor, null_extractor)

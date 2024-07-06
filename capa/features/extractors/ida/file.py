@@ -12,6 +12,7 @@ from typing import Tuple, Iterator
 import idc
 import idaapi
 import idautils
+import ida_entry
 
 import capa.features.extractors.common
 import capa.features.extractors.helpers
@@ -21,12 +22,14 @@ from capa.features.file import Export, Import, Section, FunctionName
 from capa.features.common import FORMAT_PE, FORMAT_ELF, Format, String, Feature, Characteristic
 from capa.features.address import NO_ADDRESS, Address, FileOffsetAddress, AbsoluteVirtualAddress
 
+MAX_OFFSET_PE_AFTER_MZ = 0x200
+
 
 def check_segment_for_pe(seg: idaapi.segment_t) -> Iterator[Tuple[int, int]]:
     """check segment for embedded PE
 
     adapted for IDA from:
-    https://github.com/vivisect/vivisect/blob/7be4037b1cecc4551b397f840405a1fc606f9b53/PE/carve.py#L19
+    https://github.com/vivisect/vivisect/blob/91e8419a861f49779f18316f155311967e696836/PE/carve.py#L25
     """
     seg_max = seg.end_ea
     mz_xor = [
@@ -40,13 +43,14 @@ def check_segment_for_pe(seg: idaapi.segment_t) -> Iterator[Tuple[int, int]]:
 
     todo = []
     for mzx, pex, i in mz_xor:
+        # find all segment offsets containing XOR'd "MZ" bytes
         for off in capa.features.extractors.ida.helpers.find_byte_sequence(seg.start_ea, seg.end_ea, mzx):
             todo.append((off, mzx, pex, i))
 
     while len(todo):
         off, mzx, pex, i = todo.pop()
 
-        # The MZ header has one field we will check e_lfanew is at 0x3c
+        # MZ header has one field we will check e_lfanew is at 0x3c
         e_lfanew = off + 0x3C
 
         if seg_max < (e_lfanew + 4):
@@ -54,15 +58,16 @@ def check_segment_for_pe(seg: idaapi.segment_t) -> Iterator[Tuple[int, int]]:
 
         newoff = struct.unpack("<I", capa.features.extractors.helpers.xor_static(idc.get_bytes(e_lfanew, 4), i))[0]
 
+        # assume XOR'd "PE" bytes exist within threshold
+        if newoff > MAX_OFFSET_PE_AFTER_MZ:
+            continue
+
         peoff = off + newoff
         if seg_max < (peoff + 2):
             continue
 
         if idc.get_bytes(peoff, 2) == pex:
             yield off, i
-
-        for nextres in capa.features.extractors.ida.helpers.find_byte_sequence(off + 1, seg.end_ea, mzx):
-            todo.append((nextres, mzx, pex, i))
 
 
 def extract_file_embedded_pe() -> Iterator[Tuple[Feature, Address]]:
@@ -79,8 +84,14 @@ def extract_file_embedded_pe() -> Iterator[Tuple[Feature, Address]]:
 
 def extract_file_export_names() -> Iterator[Tuple[Feature, Address]]:
     """extract function exports"""
-    for _, _, ea, name in idautils.Entries():
-        yield Export(name), AbsoluteVirtualAddress(ea)
+    for _, ordinal, ea, name in idautils.Entries():
+        forwarded_name = ida_entry.get_entry_forwarder(ordinal)
+        if forwarded_name is None:
+            yield Export(name), AbsoluteVirtualAddress(ea)
+        else:
+            forwarded_name = capa.features.extractors.helpers.reformat_forwarded_export_name(forwarded_name)
+            yield Export(forwarded_name), AbsoluteVirtualAddress(ea)
+            yield Characteristic("forwarded export"), AbsoluteVirtualAddress(ea)
 
 
 def extract_file_import_names() -> Iterator[Tuple[Feature, Address]]:
@@ -99,20 +110,20 @@ def extract_file_import_names() -> Iterator[Tuple[Feature, Address]]:
         if info[1] and info[2]:
             # e.g. in mimikatz: ('cabinet', 'FCIAddFile', 11L)
             # extract by name here and by ordinal below
-            for name in capa.features.extractors.helpers.generate_symbols(info[0], info[1]):
+            for name in capa.features.extractors.helpers.generate_symbols(info[0], info[1], include_dll=True):
                 yield Import(name), addr
             dll = info[0]
-            symbol = "#%d" % (info[2])
+            symbol = f"#{info[2]}"
         elif info[1]:
             dll = info[0]
             symbol = info[1]
         elif info[2]:
             dll = info[0]
-            symbol = "#%d" % (info[2])
+            symbol = f"#{info[2]}"
         else:
             continue
 
-        for name in capa.features.extractors.helpers.generate_symbols(dll, symbol):
+        for name in capa.features.extractors.helpers.generate_symbols(dll, symbol, include_dll=True):
             yield Import(name), addr
 
     for ea, info in capa.features.extractors.ida.helpers.get_file_externs().items():
@@ -176,7 +187,7 @@ def extract_file_format() -> Iterator[Tuple[Feature, Address]]:
         # no file type to return when processing a binary file, but we want to continue processing
         return
     else:
-        raise NotImplementedError("unexpected file format: %d" % file_info.filetype)
+        raise NotImplementedError(f"unexpected file format: {file_info.filetype}")
 
 
 def extract_features() -> Iterator[Tuple[Feature, Address]]:
@@ -195,14 +206,3 @@ FILE_HANDLERS = (
     extract_file_function_names,
     extract_file_format,
 )
-
-
-def main():
-    """ """
-    import pprint
-
-    pprint.pprint(list(extract_features()))
-
-
-if __name__ == "__main__":
-    main()

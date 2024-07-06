@@ -34,7 +34,7 @@ def get_printable_len(op: idaapi.op_t) -> int:
     elif op.dtype == idaapi.dt_qword:
         chars = struct.pack("<Q", op_val)
     else:
-        raise ValueError("Unhandled operand data type 0x%x." % op.dtype)
+        raise ValueError(f"Unhandled operand data type 0x{op.dtype:x}.")
 
     def is_printable_ascii(chars_: bytes):
         return all(c < 127 and chr(c) in string.printable for c in chars_)
@@ -104,19 +104,3 @@ BASIC_BLOCK_HANDLERS = (
     extract_bb_tight_loop,
     extract_bb_stackstring,
 )
-
-
-def main():
-    features = []
-    for fhandle in helpers.get_functions(skip_thunks=True, skip_libs=True):
-        f: idaapi.func_t = fhandle.inner
-        for bb in idaapi.FlowChart(f, flags=idaapi.FC_PREDS):
-            features.extend(list(extract_features(fhandle, bb)))
-
-    import pprint
-
-    pprint.pprint(features)
-
-
-if __name__ == "__main__":
-    main()

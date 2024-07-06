@@ -1,4 +1,4 @@
-# Copyright (C) 2022 FireEye, Inc. All Rights Reserved.
+# Copyright (C) 2022 Mandiant, Inc. All Rights Reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at: [package root]/LICENSE.txt
@@ -20,9 +20,11 @@ def test_rule_scope_instruction():
             rule:
                 meta:
                     name: test rule
-                    scope: instruction
+                    scopes:
+                        static: instruction
+                        dynamic: unsupported
                 features:
-                  - and:
+                - and:
                     - mnemonic: mov
                     - arch: i386
                     - os: windows
@@ -37,7 +39,9 @@ def test_rule_scope_instruction():
                 rule:
                     meta:
                         name: test rule
-                        scope: instruction
+                        scopes:
+                            static: instruction
+                            dynamic: unsupported
                     features:
                         - characteristic: embedded pe
                 """
@@ -54,7 +58,9 @@ def test_rule_subscope_instruction():
                     rule:
                         meta:
                             name: test rule
-                            scope: function
+                            scopes:
+                                static: function
+                                dynamic: process
                         features:
                         - and:
                             - instruction:
@@ -83,7 +89,9 @@ def test_scope_instruction_implied_and():
             rule:
                 meta:
                     name: test rule
-                    scope: function
+                    scopes:
+                        static: function
+                        dynamic: process
                 features:
                   - and:
                     - instruction:
@@ -102,7 +110,9 @@ def test_scope_instruction_description():
             rule:
                 meta:
                     name: test rule
-                    scope: function
+                    scopes:
+                        static: function
+                        dynamic: process
                 features:
                   - and:
                     - instruction:
@@ -120,7 +130,9 @@ def test_scope_instruction_description():
             rule:
                 meta:
                     name: test rule
-                    scope: function
+                    scopes:
+                        static: function
+                        dynamic: process
                 features:
                   - and:
                     - instruction:

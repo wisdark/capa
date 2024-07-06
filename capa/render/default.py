@@ -11,7 +11,6 @@ import collections
 import tabulate
 
 import capa.render.utils as rutils
-import capa.features.freeze as frz
 import capa.render.result_document as rd
 import capa.features.freeze.features as frzf
 from capa.rules import RuleSet
@@ -34,13 +33,14 @@ def render_meta(doc: rd.ResultDocument, ostream: StringIO):
         (width("md5", 22), width(doc.meta.sample.md5, 82)),
         ("sha1", doc.meta.sample.sha1),
         ("sha256", doc.meta.sample.sha256),
+        ("analysis", doc.meta.flavor.value),
         ("os", doc.meta.analysis.os),
         ("format", doc.meta.analysis.format),
         ("arch", doc.meta.analysis.arch),
         ("path", doc.meta.sample.path),
     ]
 
-    ostream.write(tabulate.tabulate(rows, tablefmt="psql"))
+    ostream.write(tabulate.tabulate(rows, tablefmt="mixed_outline"))
     ostream.write("\n")
 
 
@@ -49,7 +49,7 @@ def find_subrule_matches(doc: rd.ResultDocument):
     collect the rule names that have been matched as a subrule match.
     this way we can avoid displaying entries for things that are too specific.
     """
-    matches = set([])
+    matches = set()
 
     def rec(match: rd.Match):
         if not match.success:
@@ -65,7 +65,7 @@ def find_subrule_matches(doc: rd.ResultDocument):
             matches.add(match.node.feature.match)
 
     for rule in rutils.capability_rules(doc):
-        for address, match in rule.matches:
+        for _, match in rule.matches:
             rec(match)
 
     return matches
@@ -97,12 +97,16 @@ def render_capabilities(doc: rd.ResultDocument, ostream: StringIO):
         if count == 1:
             capability = rutils.bold(rule.meta.name)
         else:
-            capability = "%s (%d matches)" % (rutils.bold(rule.meta.name), count)
+            capability = f"{rutils.bold(rule.meta.name)} ({count} matches)"
         rows.append((capability, rule.meta.namespace))
 
     if rows:
         ostream.write(
-            tabulate.tabulate(rows, headers=[width("CAPABILITY", 50), width("NAMESPACE", 50)], tablefmt="psql")
+            tabulate.tabulate(
+                rows,
+                headers=[width("Capability", 50), width("Namespace", 50)],
+                tablefmt="mixed_outline",
+            )
         )
         ostream.write("\n")
     else:
@@ -135,9 +139,9 @@ def render_attack(doc: rd.ResultDocument, ostream: StringIO):
         inner_rows = []
         for technique, subtechnique, id in sorted(techniques):
             if not subtechnique:
-                inner_rows.append("%s %s" % (rutils.bold(technique), id))
+                inner_rows.append(f"{rutils.bold(technique)} {id}")
             else:
-                inner_rows.append("%s::%s %s" % (rutils.bold(technique), subtechnique, id))
+                inner_rows.append(f"{rutils.bold(technique)}::{subtechnique} {id}")
         rows.append(
             (
                 rutils.bold(tactic.upper()),
@@ -148,7 +152,55 @@ def render_attack(doc: rd.ResultDocument, ostream: StringIO):
     if rows:
         ostream.write(
             tabulate.tabulate(
-                rows, headers=[width("ATT&CK Tactic", 20), width("ATT&CK Technique", 80)], tablefmt="psql"
+                rows,
+                headers=[width("ATT&CK Tactic", 20), width("ATT&CK Technique", 80)],
+                tablefmt="mixed_grid",
+            )
+        )
+        ostream.write("\n")
+
+
+def render_maec(doc: rd.ResultDocument, ostream: StringIO):
+    """
+    example::
+
+        +--------------------------+-----------------------------------------------------------+
+        | MAEC Category            | MAEC Value                                                |
+        |--------------------------+-----------------------------------------------------------|
+        | analysis-conclusion      | malicious                                                 |
+        |--------------------------+-----------------------------------------------------------|
+        | malware-family           | PlugX                                                     |
+        |--------------------------+-----------------------------------------------------------|
+        | malware-category         | downloader                                                |
+        |                          | launcher                                                  |
+        +--------------------------+-----------------------------------------------------------+
+    """
+    maec_categories = {
+        "analysis_conclusion",
+        "analysis_conclusion_ov",
+        "malware_family",
+        "malware_category",
+        "malware_category_ov",
+    }
+    maec_table = collections.defaultdict(set)
+    for rule in rutils.maec_rules(doc):
+        for maec_category in maec_categories:
+            maec_value = getattr(rule.meta.maec, maec_category, None)
+            if maec_value:
+                maec_table[maec_category].add(maec_value)
+
+    rows = []
+    for category in sorted(maec_categories):
+        values = maec_table.get(category, set())
+        if values:
+            rows.append((rutils.bold(category.replace("_", "-")), "\n".join(sorted(values))))
+
+    if rows:
+        ostream.write(
+            tabulate.tabulate(
+                rows,
+                headers=[width("MAEC Category", 25), width("MAEC Value", 75)],
+                tablefmt="mixed_grid",
             )
         )
         ostream.write("\n")
@@ -178,9 +230,9 @@ def render_mbc(doc: rd.ResultDocument, ostream: StringIO):
         inner_rows = []
         for behavior, method, id in sorted(behaviors):
             if not method:
-                inner_rows.append("%s [%s]" % (rutils.bold(behavior), id))
+                inner_rows.append(f"{rutils.bold(behavior)} [{id}]")
             else:
-                inner_rows.append("%s::%s [%s]" % (rutils.bold(behavior), method, id))
+                inner_rows.append(f"{rutils.bold(behavior)}::{method} [{id}]")
         rows.append(
             (
                 rutils.bold(objective.upper()),
@@ -190,7 +242,11 @@ def render_mbc(doc: rd.ResultDocument, ostream: StringIO):
 
     if rows:
         ostream.write(
-            tabulate.tabulate(rows, headers=[width("MBC Objective", 25), width("MBC Behavior", 75)], tablefmt="psql")
+            tabulate.tabulate(
+                rows,
+                headers=[width("MBC Objective", 25), width("MBC Behavior", 75)],
+                tablefmt="mixed_grid",
+            )
         )
         ostream.write("\n")
 
@@ -201,6 +257,8 @@ def render_default(doc: rd.ResultDocument):
     render_meta(doc, ostream)
     ostream.write("\n")
     render_attack(doc, ostream)
+    ostream.write("\n")
+    render_maec(doc, ostream)
     ostream.write("\n")
     render_mbc(doc, ostream)
     ostream.write("\n")

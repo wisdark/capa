@@ -8,6 +8,7 @@
 from typing import Tuple, Iterator
 
 import PE.carve as pe_carve  # vivisect PE
+import vivisect
 import viv_utils
 import viv_utils.flirt
 
@@ -16,7 +17,7 @@ import capa.features.extractors.common
 import capa.features.extractors.helpers
 import capa.features.extractors.strings
 from capa.features.file import Export, Import, Section, FunctionName
-from capa.features.common import String, Feature, Characteristic
+from capa.features.common import Feature, Characteristic
 from capa.features.address import Address, FileOffsetAddress, AbsoluteVirtualAddress
 
 
@@ -25,9 +26,34 @@ def extract_file_embedded_pe(buf, **kwargs) -> Iterator[Tuple[Feature, Address]]
         yield Characteristic("embedded pe"), FileOffsetAddress(offset)
 
 
-def extract_file_export_names(vw, **kwargs) -> Iterator[Tuple[Feature, Address]]:
+def get_first_vw_filename(vw: vivisect.VivWorkspace):
+    # vivisect associates metadata with each file that its loaded into the workspace.
+    # capa only loads a single file into each workspace.
+    # so to access the metadata for the file in question, we can just take the first one.
+    # otherwise, we'd have to pass around the module name of the file we're analyzing,
+    # which is a pain.
+    #
+    # so this is a simplifying assumption.
+    return next(iter(vw.filemeta.keys()))
+
+
+def extract_file_export_names(vw: vivisect.VivWorkspace, **kwargs) -> Iterator[Tuple[Feature, Address]]:
     for va, _, name, _ in vw.getExports():
         yield Export(name), AbsoluteVirtualAddress(va)
+
+    if vw.getMeta("Format") == "pe":
+        pe = vw.parsedbin
+        baseaddr = pe.IMAGE_NT_HEADERS.OptionalHeader.ImageBase
+        for rva, _, forwarded_name in vw.getFileMeta(get_first_vw_filename(vw), "forwarders"):
+            try:
+                forwarded_name = forwarded_name.partition(b"\x00")[0].decode("ascii")
+            except UnicodeDecodeError:
+                continue
+
+            forwarded_name = capa.features.extractors.helpers.reformat_forwarded_export_name(forwarded_name)
+            va = baseaddr + rva
+            yield Export(forwarded_name), AbsoluteVirtualAddress(va)
+            yield Characteristic("forwarded export"), AbsoluteVirtualAddress(va)
 
 
 def extract_file_import_names(vw, **kwargs) -> Iterator[Tuple[Feature, Address]]:
@@ -44,10 +70,10 @@ def extract_file_import_names(vw, **kwargs) -> Iterator[Tuple[Feature, Address]]
         modname, impname = tinfo.split(".", 1)
         if is_viv_ord_impname(impname):
             # replace ord prefix with #
-            impname = "#%s" % impname[len("ord") :]
+            impname = "#" + impname[len("ord") :]
 
         addr = AbsoluteVirtualAddress(va)
-        for name in capa.features.extractors.helpers.generate_symbols(modname, impname):
+        for name in capa.features.extractors.helpers.generate_symbols(modname, impname, include_dll=True):
             yield Import(name), addr
 
 

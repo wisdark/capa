@@ -30,7 +30,7 @@ def info_to_name(display):
 
 def ea_to_hex(ea):
     """convert effective address (ea) to hex for display"""
-    return "%08X" % ea
+    return f"{hex(ea)}"
 
 
 class CapaExplorerDataItem:
@@ -130,8 +130,7 @@ class CapaExplorerDataItem:
 
     def children(self) -> Iterator["CapaExplorerDataItem"]:
         """yield children"""
-        for child in self._children:
-            yield child
+        yield from self._children
 
     def removeChildren(self):
         """remove children"""

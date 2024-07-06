@@ -38,6 +38,12 @@ class CapaExplorerPlugin(idaapi.plugin_t):
         """called when IDA is loading the plugin"""
         logging.basicConfig(level=logging.INFO)
 
+        # do not load plugin unless hosted in idaq (IDA Qt)
+        if not idaapi.is_idaq():
+            # note: it does not appear that IDA calls "init" by default when hosted in idat; we keep this
+            # check here for good measure
+            return idaapi.PLUGIN_SKIP
+
         import capa.ida.helpers
 
         # do not load plugin if IDA version/file type not supported
@@ -61,7 +67,16 @@ class CapaExplorerPlugin(idaapi.plugin_t):
           arg (int): bitflag. Setting LSB enables automatic analysis upon
           loading. The other bits are currently undefined. See `form.Options`.
         """
-        self.form = CapaExplorerForm(self.PLUGIN_NAME, arg)
+        if not self.form:
+            self.form = CapaExplorerForm(self.PLUGIN_NAME, arg)
+        else:
+            widget = idaapi.find_widget(self.form.form_title)
+            if widget:
+                idaapi.activate_widget(widget, True)
+            else:
+                self.form.Show()
+                self.form.load_capa_results(False, True)
+
         return True
 
 
@@ -110,7 +125,7 @@ def install_icon():
         return False
 
     # resource leak here. need to call `ida_kernwin.free_custom_icon`?
-    # however, since we're not cycling this icon a lot, its probably ok.
+    # however, since we're not cycling this icon a lot, it's probably ok.
     # expect to leak exactly one icon per application load.
     icon = ida_kernwin.load_custom_icon(data=ICON)
 

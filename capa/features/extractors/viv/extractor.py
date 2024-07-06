@@ -1,4 +1,4 @@
-# Copyright (C) 2020 Mandiant, Inc. All Rights Reserved.
+# Copyright (C) 2021 Mandiant, Inc. All Rights Reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at: [package root]/LICENSE.txt
@@ -6,7 +6,8 @@
 #  is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and limitations under the License.
 import logging
-from typing import List, Tuple, Iterator
+from typing import Any, Dict, List, Tuple, Iterator
+from pathlib import Path
 
 import viv_utils
 import viv_utils.flirt
@@ -19,23 +20,28 @@ import capa.features.extractors.viv.function
 import capa.features.extractors.viv.basicblock
 from capa.features.common import Feature
 from capa.features.address import Address, AbsoluteVirtualAddress
-from capa.features.extractors.base_extractor import BBHandle, InsnHandle, FunctionHandle, FeatureExtractor
+from capa.features.extractors.base_extractor import (
+    BBHandle,
+    InsnHandle,
+    SampleHashes,
+    FunctionHandle,
+    StaticFeatureExtractor,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class VivisectFeatureExtractor(FeatureExtractor):
-    def __init__(self, vw, path):
-        super().__init__()
+class VivisectFeatureExtractor(StaticFeatureExtractor):
+    def __init__(self, vw, path: Path, os):
         self.vw = vw
         self.path = path
-        with open(self.path, "rb") as f:
-            self.buf = f.read()
+        self.buf = path.read_bytes()
+        super().__init__(hashes=SampleHashes.from_bytes(self.buf))
 
         # pre-compute these because we'll yield them at *every* scope.
         self.global_features: List[Tuple[Feature, Address]] = []
         self.global_features.extend(capa.features.extractors.viv.file.extract_file_format(self.buf))
-        self.global_features.extend(capa.features.extractors.common.extract_os(self.buf))
+        self.global_features.extend(capa.features.extractors.common.extract_os(self.buf, os))
         self.global_features.extend(capa.features.extractors.viv.global_.extract_arch(self.vw))
 
     def get_base_address(self):
@@ -49,8 +55,11 @@ class VivisectFeatureExtractor(FeatureExtractor):
         yield from capa.features.extractors.viv.file.extract_features(self.vw, self.buf)
 
     def get_functions(self) -> Iterator[FunctionHandle]:
+        cache: Dict[str, Any] = {}
         for va in sorted(self.vw.getFunctions()):
-            yield FunctionHandle(address=AbsoluteVirtualAddress(va), inner=viv_utils.Function(self.vw, va))
+            yield FunctionHandle(
+                address=AbsoluteVirtualAddress(va), inner=viv_utils.Function(self.vw, va), ctx={"cache": cache}
+            )
 
     def extract_function_features(self, fh: FunctionHandle) -> Iterator[Tuple[Feature, Address]]:
         yield from capa.features.extractors.viv.function.extract_features(fh)

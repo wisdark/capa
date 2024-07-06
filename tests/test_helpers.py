@@ -1,4 +1,4 @@
-# Copyright (C) 2020 FireEye, Inc. All Rights Reserved.
+# Copyright (C) 2020 Mandiant, Inc. All Rights Reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at: [package root]/LICENSE.txt
@@ -20,3 +20,47 @@ def test_all_zeros():
     assert helpers.all_zeros(b) is True
     assert helpers.all_zeros(c) is False
     assert helpers.all_zeros(d) is False
+
+
+def test_generate_symbols():
+    assert list(helpers.generate_symbols("name.dll", "api", include_dll=True)) == list(
+        helpers.generate_symbols("name", "api", include_dll=True)
+    )
+    assert list(helpers.generate_symbols("name.dll", "api", include_dll=False)) == list(
+        helpers.generate_symbols("name", "api", include_dll=False)
+    )
+
+    # A/W import
+    symbols = list(helpers.generate_symbols("kernel32", "CreateFileA", include_dll=True))
+    assert len(symbols) == 4
+    assert "kernel32.CreateFileA" in symbols
+    assert "kernel32.CreateFile" in symbols
+    assert "CreateFileA" in symbols
+    assert "CreateFile" in symbols
+
+    # import
+    symbols = list(helpers.generate_symbols("kernel32", "WriteFile", include_dll=True))
+    assert len(symbols) == 2
+    assert "kernel32.WriteFile" in symbols
+    assert "WriteFile" in symbols
+
+    # ordinal import
+    symbols = list(helpers.generate_symbols("ws2_32", "#1", include_dll=True))
+    assert len(symbols) == 1
+    assert "ws2_32.#1" in symbols
+
+    # A/W api
+    symbols = list(helpers.generate_symbols("kernel32", "CreateFileA", include_dll=False))
+    assert len(symbols) == 2
+    assert "CreateFileA" in symbols
+    assert "CreateFile" in symbols
+
+    # api
+    symbols = list(helpers.generate_symbols("kernel32", "WriteFile", include_dll=False))
+    assert len(symbols) == 1
+    assert "WriteFile" in symbols
+
+    # ordinal api
+    symbols = list(helpers.generate_symbols("ws2_32", "#1", include_dll=False))
+    assert len(symbols) == 1
+    assert "ws2_32.#1" in symbols

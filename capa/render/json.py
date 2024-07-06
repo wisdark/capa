@@ -1,4 +1,4 @@
-# Copyright (C) 2020 Mandiant, Inc. All Rights Reserved.
+# Copyright (C) 2021 Mandiant, Inc. All Rights Reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at: [package root]/LICENSE.txt
@@ -11,4 +11,4 @@ from capa.engine import MatchResults
 
 
 def render(meta, rules: RuleSet, capabilities: MatchResults) -> str:
-    return rd.ResultDocument.from_capa(meta, rules, capabilities).json(exclude_none=True)
+    return rd.ResultDocument.from_capa(meta, rules, capabilities).model_dump_json(exclude_none=True)

@@ -1,4 +1,4 @@
-# Copyright (C) 2020 Mandiant, Inc. All Rights Reserved.
+# Copyright (C) 2022 Mandiant, Inc. All Rights Reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at: [package root]/LICENSE.txt
@@ -6,16 +6,17 @@
 #  is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and limitations under the License.
 
-from enum import Enum
-from typing import Union, Optional
+from typing import Tuple, Optional
 
 
-class DnType(object):
-    def __init__(self, token: int, class_: str, namespace: str = "", member: str = "", access: Optional[str] = None):
+class DnType:
+    def __init__(
+        self, token: int, class_: Tuple[str, ...], namespace: str = "", member: str = "", access: Optional[str] = None
+    ):
         self.token: int = token
         self.access: Optional[str] = access
         self.namespace: str = namespace
-        self.class_: str = class_
+        self.class_: Tuple[str, ...] = class_
 
         if member == ".ctor":
             member = "ctor"
@@ -43,9 +44,13 @@ class DnType(object):
         return str(self)
 
     @staticmethod
-    def format_name(class_: str, namespace: str = "", member: str = ""):
+    def format_name(class_: Tuple[str, ...], namespace: str = "", member: str = ""):
+        if len(class_) > 1:
+            class_str = "/".join(class_)  # Concat items in tuple, separated by a "/"
+        else:
+            class_str = "".join(class_)  # Convert tuple to str
         # like File::OpenRead
-        name: str = f"{class_}::{member}" if member else class_
+        name: str = f"{class_str}::{member}" if member else class_str
         if namespace:
             # like System.IO.File::OpenRead
             name = f"{namespace}.{name}"

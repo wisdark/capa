@@ -92,7 +92,6 @@ def is_mov_imm_to_stack(instr: envi.archs.i386.disasm.i386Opcode) -> bool:
     if not src.isImmed():
         return False
 
-    # TODO what about 64-bit operands?
     if not isinstance(dst, envi.archs.i386.disasm.i386SibOper) and not isinstance(
         dst, envi.archs.i386.disasm.i386RegMemOper
     ):
@@ -121,7 +120,7 @@ def get_printable_len(oper: envi.archs.i386.disasm.i386ImmOper) -> int:
     elif oper.tsize == 8:
         chars = struct.pack("<Q", oper.imm)
     else:
-        raise ValueError("unexpected oper.tsize: %d" % (oper.tsize))
+        raise ValueError(f"unexpected oper.tsize: {oper.tsize}")
 
     if is_printable_ascii(chars):
         return oper.tsize
@@ -141,7 +140,7 @@ def is_printable_ascii(chars: bytes) -> bool:
 
 
 def is_printable_utf16le(chars: bytes) -> bool:
-    if all(c == b"\x00" for c in chars[1::2]):
+    if all(c == 0x0 for c in chars[1::2]):
         return is_printable_ascii(chars[::2])
     return False
 

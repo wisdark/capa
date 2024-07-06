@@ -1,4 +1,4 @@
-# Copyright (C) 2020 Mandiant, Inc. All Rights Reserved.
+# Copyright (C) 2021 Mandiant, Inc. All Rights Reserved.
 # Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at: [package root]/LICENSE.txt
@@ -8,6 +8,7 @@
 from typing import List, Tuple, Iterator
 
 import idaapi
+import ida_nalt
 
 import capa.ida.helpers
 import capa.features.extractors.elf
@@ -18,12 +19,22 @@ import capa.features.extractors.ida.function
 import capa.features.extractors.ida.basicblock
 from capa.features.common import Feature
 from capa.features.address import Address, AbsoluteVirtualAddress
-from capa.features.extractors.base_extractor import BBHandle, InsnHandle, FunctionHandle, FeatureExtractor
+from capa.features.extractors.base_extractor import (
+    BBHandle,
+    InsnHandle,
+    SampleHashes,
+    FunctionHandle,
+    StaticFeatureExtractor,
+)
 
 
-class IdaFeatureExtractor(FeatureExtractor):
+class IdaFeatureExtractor(StaticFeatureExtractor):
     def __init__(self):
-        super().__init__()
+        super().__init__(
+            hashes=SampleHashes(
+                md5=ida_nalt.retrieve_input_file_md5(), sha1="(unknown)", sha256=ida_nalt.retrieve_input_file_sha256()
+            )
+        )
         self.global_features: List[Tuple[Feature, Address]] = []
         self.global_features.extend(capa.features.extractors.ida.file.extract_file_format())
         self.global_features.extend(capa.features.extractors.ida.global_.extract_os())
