@@ -7,9 +7,8 @@
 # See the License for the specific language governing permissions and limitations under the License.
 import logging
 import contextlib
-from typing import Tuple, Iterator
+from typing import Iterator
 
-import idaapi
 import ida_loader
 
 import capa.ida.helpers
@@ -20,7 +19,7 @@ from capa.features.address import NO_ADDRESS, Address
 logger = logging.getLogger(__name__)
 
 
-def extract_os() -> Iterator[Tuple[Feature, Address]]:
+def extract_os() -> Iterator[tuple[Feature, Address]]:
     format_name: str = ida_loader.get_file_type_name()
 
     if "PE" in format_name:
@@ -47,13 +46,13 @@ def extract_os() -> Iterator[Tuple[Feature, Address]]:
         return
 
 
-def extract_arch() -> Iterator[Tuple[Feature, Address]]:
-    info: idaapi.idainfo = idaapi.get_inf_structure()
-    if info.procname == "metapc" and info.is_64bit():
+def extract_arch() -> Iterator[tuple[Feature, Address]]:
+    procname = capa.ida.helpers.get_processor_name()
+    if procname == "metapc" and capa.ida.helpers.is_64bit():
         yield Arch(ARCH_AMD64), NO_ADDRESS
-    elif info.procname == "metapc" and info.is_32bit():
+    elif procname == "metapc" and capa.ida.helpers.is_32bit():
         yield Arch(ARCH_I386), NO_ADDRESS
-    elif info.procname == "metapc":
+    elif procname == "metapc":
         logger.debug("unsupported architecture: non-32-bit nor non-64-bit intel")
         return
     else:
@@ -61,5 +60,5 @@ def extract_arch() -> Iterator[Tuple[Feature, Address]]:
         #  1. handling a new architecture (e.g. aarch64)
         #
         # for (1), this logic will need to be updated as the format is implemented.
-        logger.debug("unsupported architecture: %s", info.procname)
+        logger.debug("unsupported architecture: %s", procname)
         return

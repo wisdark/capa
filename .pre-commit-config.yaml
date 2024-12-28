@@ -25,7 +25,7 @@ repos:
     hooks:
     -   id: isort
         name: isort
-        stages: [commit, push, manual]
+        stages: [pre-commit, pre-push, manual]
         language: system
         entry: isort
         args: 
@@ -38,6 +38,7 @@ repos:
         -   "capa/"
         -   "scripts/"
         -   "tests/"
+        -   "web/rules/scripts/"
         always_run: true
         pass_filenames: false
 
@@ -45,7 +46,7 @@ repos:
     hooks:
     -   id: black
         name: black
-        stages: [commit, push, manual]
+        stages: [pre-commit, pre-push, manual]
         language: system
         entry: black
         args: 
@@ -55,6 +56,7 @@ repos:
         -   "capa/"
         -   "scripts/"
         -   "tests/"
+        -   "web/rules/scripts/"
         always_run: true
         pass_filenames: false
 
@@ -62,7 +64,7 @@ repos:
     hooks:
     -   id: ruff
         name: ruff
-        stages: [commit, push, manual]
+        stages: [pre-commit, pre-push, manual]
         language: system
         entry: ruff
         args: 
@@ -72,6 +74,7 @@ repos:
         -   "capa/"
         -   "scripts/"
         -   "tests/"
+        -   "web/rules/scripts/"
         always_run: true
         pass_filenames: false
 
@@ -79,17 +82,18 @@ repos:
     hooks:
     -   id: flake8
         name: flake8
-        stages: [push, manual]
+        stages: [pre-push, manual]
         language: system
         entry: flake8
         args: 
         -   "--config"
         -   ".github/flake8.ini"
         -   "--extend-exclude"
-        -   "capa/render/proto/capa_pb2.py"
+        -   "capa/render/proto/capa_pb2.py,capa/features/extractors/binexport2/binexport2_pb2.py"
         -   "capa/"
         -   "scripts/"
         -   "tests/"
+        -   "web/rules/scripts/"
         always_run: true
         pass_filenames: false
 
@@ -97,7 +101,7 @@ repos:
     hooks:
     -   id: mypy
         name: mypy
-        stages: [push, manual]
+        stages: [pre-push, manual]
         language: system
         entry: mypy
         args: 
@@ -107,6 +111,7 @@ repos:
         -   "capa/"
         -   "scripts/"
         -   "tests/"
+        -   "web/rules/scripts/"
         always_run: true
         pass_filenames: false
 
@@ -114,7 +119,7 @@ repos:
     hooks:
     -   id: deptry
         name: deptry
-        stages: [push, manual]
+        stages: [pre-push, manual]
         language: system
         entry: deptry .
         always_run: true

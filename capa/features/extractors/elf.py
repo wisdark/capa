@@ -10,7 +10,7 @@ import logging
 import itertools
 import collections
 from enum import Enum
-from typing import TYPE_CHECKING, Set, Dict, List, Tuple, BinaryIO, Iterator, Optional
+from typing import TYPE_CHECKING, BinaryIO, Iterator, Optional
 from dataclasses import dataclass
 
 if TYPE_CHECKING:
@@ -310,6 +310,9 @@ class ELF:
         98: "TPC",
         99: "SNP1K",
         100: "ST200",
+        # https://www.sco.com/developers/gabi/latest/ch4.eheader.html
+        183: "aarch64",
+        243: "riscv",
     }
 
     @property
@@ -391,7 +394,7 @@ class ELF:
             return read_cstr(phdr.buf, 0)
 
     @property
-    def versions_needed(self) -> Dict[str, Set[str]]:
+    def versions_needed(self) -> dict[str, set[str]]:
         # symbol version requirements are stored in the .gnu.version_r section,
         # which has type SHT_GNU_verneed (0x6ffffffe).
         #
@@ -449,7 +452,7 @@ class ELF:
         return {}
 
     @property
-    def dynamic_entries(self) -> Iterator[Tuple[int, int]]:
+    def dynamic_entries(self) -> Iterator[tuple[int, int]]:
         """
         read the entries from the dynamic section,
         yielding the tag and value for each entry.
@@ -544,7 +547,7 @@ class ELF:
                 logger.warning("failed to read DT_NEEDED entry: %s", str(e))
 
     @property
-    def symtab(self) -> Optional[Tuple[Shdr, Shdr]]:
+    def symtab(self) -> Optional[tuple[Shdr, Shdr]]:
         """
         fetch the Shdr for the symtab and the associated strtab.
         """
@@ -679,7 +682,7 @@ class SymTab:
         symtab: Shdr,
         strtab: Shdr,
     ) -> None:
-        self.symbols: List[Symbol] = []
+        self.symbols: list[Symbol] = []
 
         self.symtab = symtab
         self.strtab = strtab

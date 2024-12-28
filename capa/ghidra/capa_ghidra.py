@@ -160,8 +160,8 @@ def main():
 
 
 if __name__ == "__main__":
-    if sys.version_info < (3, 8):
+    if sys.version_info < (3, 10):
         from capa.exceptions import UnsupportedRuntimeError
 
-        raise UnsupportedRuntimeError("This version of capa can only be used with Python 3.8+")
+        raise UnsupportedRuntimeError("This version of capa can only be used with Python 3.10+")
     sys.exit(main())

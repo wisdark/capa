@@ -9,14 +9,13 @@ Unless required by applicable law or agreed to in writing, software distributed 
 See the License for the specific language governing permissions and limitations under the License.
 """
 import sys
-import typing
 import logging
 import argparse
-from typing import Set, Tuple
 from collections import Counter
 
-import tabulate
-from termcolor import colored
+from rich import print
+from rich.text import Text
+from rich.table import Table
 
 import capa.main
 import capa.rules
@@ -39,8 +38,8 @@ def format_address(addr: capa.features.address.Address) -> str:
     return v.format_address(capa.features.freeze.Address.from_capa((addr)))
 
 
-def get_rules_feature_set(rules: capa.rules.RuleSet) -> Set[Feature]:
-    rules_feature_set: Set[Feature] = set()
+def get_rules_feature_set(rules: capa.rules.RuleSet) -> set[Feature]:
+    rules_feature_set: set[Feature] = set()
     for _, rule in rules.rules.items():
         rules_feature_set.update(rule.extract_all_features())
 
@@ -48,9 +47,9 @@ def get_rules_feature_set(rules: capa.rules.RuleSet) -> Set[Feature]:
 
 
 def get_file_features(
-    functions: Tuple[FunctionHandle, ...], extractor: capa.features.extractors.base_extractor.StaticFeatureExtractor
-) -> typing.Counter[Feature]:
-    feature_map: typing.Counter[Feature] = Counter()
+    functions: tuple[FunctionHandle, ...], extractor: capa.features.extractors.base_extractor.StaticFeatureExtractor
+) -> Counter[Feature]:
+    feature_map: Counter[Feature] = Counter()
 
     for f in functions:
         if extractor.is_library_function(f.address):
@@ -77,23 +76,30 @@ def get_file_features(
     return feature_map
 
 
-def get_colored(s: str):
+def get_colored(s: str) -> Text:
     if "(" in s and ")" in s:
         s_split = s.split("(", 1)
-        s_color = colored(s_split[1][:-1], "cyan")
-        return f"{s_split[0]}({s_color})"
+        return Text.assemble(s_split[0], "(", (s_split[1][:-1], "cyan"), ")")
     else:
-        return colored(s, "cyan")
+        return Text(s, style="cyan")
 
 
-def print_unused_features(feature_map: typing.Counter[Feature], rules_feature_set: Set[Feature]):
-    unused_features = []
+def print_unused_features(feature_map: Counter[Feature], rules_feature_set: set[Feature]):
+    unused_features: list[tuple[str, Text]] = []
     for feature, count in reversed(feature_map.most_common()):
         if feature in rules_feature_set:
             continue
         unused_features.append((str(count), get_colored(str(feature))))
+
+    table = Table(title="Unused Features", box=None)
+    table.add_column("Count", style="dim")
+    table.add_column("Feature")
+
+    for count_str, feature_text in unused_features:
+        table.add_row(count_str, feature_text)
+
     print("\n")
-    print(tabulate.tabulate(unused_features, headers=["Count", "Feature"], tablefmt="plain"))
+    print(table)
     print("\n")
 
 
@@ -122,11 +128,11 @@ def main(argv=None):
 
     assert isinstance(extractor, StaticFeatureExtractor), "only static analysis supported today"
 
-    feature_map: typing.Counter[Feature] = Counter()
+    feature_map: Counter[Feature] = Counter()
 
     feature_map.update([feature for feature, _ in extractor.extract_global_features()])
 
-    function_handles: Tuple[FunctionHandle, ...]
+    function_handles: tuple[FunctionHandle, ...]
     if isinstance(extractor, capa.features.extractors.pefile.PefileFeatureExtractor):
         # pefile extractor doesn't extract function features
         function_handles = ()
@@ -165,7 +171,7 @@ def ida_main():
     print(f"getting features for current function {hex(function)}")
 
     extractor = capa.features.extractors.ida.extractor.IdaFeatureExtractor()
-    feature_map: typing.Counter[Feature] = Counter()
+    feature_map: Counter[Feature] = Counter()
 
     feature_map.update([feature for feature, _ in extractor.extract_file_features()])
 

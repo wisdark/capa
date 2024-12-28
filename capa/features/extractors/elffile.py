@@ -7,7 +7,7 @@
 # See the License for the specific language governing permissions and limitations under the License.
 import io
 import logging
-from typing import Tuple, Iterator
+from typing import Iterator
 from pathlib import Path
 
 from elftools.elf.elffile import ELFFile, DynamicSegment, SymbolTableSection
@@ -50,7 +50,12 @@ def extract_file_export_names(elf: ELFFile, **kwargs):
         if not isinstance(segment, DynamicSegment):
             continue
 
-        logger.debug("Dynamic Segment contains %s symbols: ", segment.num_symbols())
+        tab_ptr, tab_offset = segment.get_table_offset("DT_SYMTAB")
+        if tab_ptr is None or tab_offset is None:
+            logger.debug("Dynamic segment doesn't contain DT_SYMTAB")
+            continue
+
+        logger.debug("Dynamic segment contains %s symbols: ", segment.num_symbols())
 
         for symbol in segment.iter_symbols():
             # The following conditions are based on the following article
@@ -74,6 +79,11 @@ def extract_file_import_names(elf: ELFFile, **kwargs):
     # Extract symbol names and store them in the dictionary
     for segment in elf.iter_segments():
         if not isinstance(segment, DynamicSegment):
+            continue
+
+        tab_ptr, tab_offset = segment.get_table_offset("DT_SYMTAB")
+        if tab_ptr is None or tab_offset is None:
+            logger.debug("Dynamic segment doesn't contain DT_SYMTAB")
             continue
 
         for _, symbol in enumerate(segment.iter_symbols()):
@@ -100,7 +110,16 @@ def extract_file_import_names(elf: ELFFile, **kwargs):
         logger.debug("Dynamic Segment contains %s relocation tables:", len(relocation_tables))
 
         for relocation_table in relocation_tables.values():
-            for relocation in relocation_table.iter_relocations():
+            relocations = []
+            for i in range(relocation_table.num_relocations()):
+                try:
+                    relocations.append(relocation_table.get_relocation(i))
+                except TypeError:
+                    # ELF is corrupt and the relocation table is invalid,
+                    # so stop processing it.
+                    break
+
+            for relocation in relocations:
                 # Extract the symbol name from the symbol table using the symbol index in the relocation
                 if relocation["r_info_sym"] not in symbol_names:
                     continue
@@ -139,11 +158,15 @@ def extract_file_arch(elf: ELFFile, **kwargs):
         yield Arch("i386"), NO_ADDRESS
     elif arch == "x64":
         yield Arch("amd64"), NO_ADDRESS
+    elif arch == "ARM":
+        yield Arch("arm"), NO_ADDRESS
+    elif arch == "AArch64":
+        yield Arch("aarch64"), NO_ADDRESS
     else:
         logger.warning("unsupported architecture: %s", arch)
 
 
-def extract_file_features(elf: ELFFile, buf: bytes) -> Iterator[Tuple[Feature, int]]:
+def extract_file_features(elf: ELFFile, buf: bytes) -> Iterator[tuple[Feature, int]]:
     for file_handler in FILE_HANDLERS:
         for feature, addr in file_handler(elf=elf, buf=buf):  # type: ignore
             yield feature, addr
@@ -159,7 +182,7 @@ FILE_HANDLERS = (
 )
 
 
-def extract_global_features(elf: ELFFile, buf: bytes) -> Iterator[Tuple[Feature, int]]:
+def extract_global_features(elf: ELFFile, buf: bytes) -> Iterator[tuple[Feature, int]]:
     for global_handler in GLOBAL_HANDLERS:
         for feature, addr in global_handler(elf=elf, buf=buf):  # type: ignore
             yield feature, addr

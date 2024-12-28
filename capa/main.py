@@ -17,11 +17,12 @@ import argparse
 import textwrap
 import contextlib
 from types import TracebackType
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional, TypedDict
 from pathlib import Path
 
 import colorama
 from pefile import PEFormatError
+from rich.logging import RichHandler
 from elftools.common.exceptions import ELFError
 
 import capa.perf
@@ -42,17 +43,31 @@ import capa.render.result_document as rdoc
 import capa.features.extractors.common
 from capa.rules import RuleSet
 from capa.engine import MatchResults
-from capa.loader import BACKEND_VIV, BACKEND_CAPE, BACKEND_BINJA, BACKEND_DOTNET, BACKEND_FREEZE, BACKEND_PEFILE
+from capa.loader import (
+    BACKEND_IDA,
+    BACKEND_VIV,
+    BACKEND_CAPE,
+    BACKEND_BINJA,
+    BACKEND_VMRAY,
+    BACKEND_DOTNET,
+    BACKEND_FREEZE,
+    BACKEND_PEFILE,
+    BACKEND_DRAKVUF,
+    BACKEND_BINEXPORT2,
+)
 from capa.helpers import (
     get_file_taste,
     get_auto_format,
     log_unsupported_os_error,
     log_unsupported_arch_error,
-    log_empty_cape_report_error,
     log_unsupported_format_error,
+    log_empty_sandbox_report_error,
     log_unsupported_cape_report_error,
+    log_unsupported_vmray_report_error,
+    log_unsupported_drakvuf_report_error,
 )
 from capa.exceptions import (
+    InvalidArgument,
     EmptyReportError,
     UnsupportedOSError,
     UnsupportedArchError,
@@ -70,12 +85,24 @@ from capa.features.common import (
     FORMAT_CAPE,
     FORMAT_SC32,
     FORMAT_SC64,
+    FORMAT_VMRAY,
     FORMAT_DOTNET,
     FORMAT_FREEZE,
     FORMAT_RESULT,
+    FORMAT_DRAKVUF,
+    STATIC_FORMATS,
+    DYNAMIC_FORMATS,
+    FORMAT_BINJA_DB,
+    FORMAT_BINEXPORT2,
 )
 from capa.capabilities.common import find_capabilities, has_file_limitation, find_file_capabilities
-from capa.features.extractors.base_extractor import FeatureExtractor, StaticFeatureExtractor, DynamicFeatureExtractor
+from capa.features.extractors.base_extractor import (
+    ProcessFilter,
+    FunctionFilter,
+    FeatureExtractor,
+    StaticFeatureExtractor,
+    DynamicFeatureExtractor,
+)
 
 RULES_PATH_DEFAULT_STRING = "(embedded rules)"
 SIGNATURES_PATH_DEFAULT_STRING = "(embedded signatures)"
@@ -96,8 +123,15 @@ E_MISSING_CAPE_STATIC_ANALYSIS = 21
 E_MISSING_CAPE_DYNAMIC_ANALYSIS = 22
 E_EMPTY_REPORT = 23
 E_UNSUPPORTED_GHIDRA_EXECUTION_MODE = 24
+E_INVALID_INPUT_FORMAT = 25
+E_INVALID_FEATURE_EXTRACTOR = 26
 
 logger = logging.getLogger("capa")
+
+
+class FilterConfig(TypedDict, total=False):
+    processes: set[int]
+    functions: set[int]
 
 
 @contextlib.contextmanager
@@ -137,7 +171,7 @@ def get_default_root() -> Path:
         return Path(__file__).resolve().parent.parent
 
 
-def get_default_signatures() -> List[Path]:
+def get_default_signatures() -> list[Path]:
     """
     compute a list of file system paths to the default FLIRT signatures.
     """
@@ -152,24 +186,21 @@ def get_default_signatures() -> List[Path]:
     return ret
 
 
-def simple_message_exception_handler(exctype, value: BaseException, traceback: TracebackType):
+def simple_message_exception_handler(
+    exctype: type[BaseException], value: BaseException, traceback: TracebackType | None
+):
     """
     prints friendly message on unexpected exceptions to regular users (debug mode shows regular stack trace)
-
-    args:
-      # TODO(aaronatp): Once capa drops support for Python 3.8, move the exctype type annotation to
-      # the function parameters and remove the "# type: ignore[assignment]" from the relevant place
-      # in the main function, see (https://github.com/mandiant/capa/issues/1896)
-      exctype (type[BaseException]): exception class
     """
 
     if exctype is KeyboardInterrupt:
-        print("KeyboardInterrupt detected, program terminated")
+        print("KeyboardInterrupt detected, program terminated", file=sys.stderr)
     else:
         print(
             f"Unexpected exception raised: {exctype}. Please run capa in debug mode (-d/--debug) "
-            + "to see the stack trace. Please also report your issue on the capa GitHub page so we "
-            + "can improve the code! (https://github.com/mandiant/capa/issues)"
+            + "to see the stack trace.\nPlease also report your issue on the capa GitHub page so we "
+            + "can improve the code! (https://github.com/mandiant/capa/issues)",
+            file=sys.stderr,
         )
 
 
@@ -184,7 +215,7 @@ def install_common_args(parser, wanted=None):
 
     args:
       parser (argparse.ArgumentParser): a parser to update in place, adding common arguments.
-      wanted (Set[str]): collection of arguments to opt-into, including:
+      wanted (set[str]): collection of arguments to opt-into, including:
         - "input_file": required positional argument to input file.
         - "format": flag to override file format.
         - "os": flag to override file operating system.
@@ -232,7 +263,11 @@ def install_common_args(parser, wanted=None):
             (FORMAT_SC32, "32-bit shellcode"),
             (FORMAT_SC64, "64-bit shellcode"),
             (FORMAT_CAPE, "CAPE sandbox report"),
+            (FORMAT_DRAKVUF, "DRAKVUF sandbox report"),
+            (FORMAT_VMRAY, "VMRay sandbox report"),
             (FORMAT_FREEZE, "features previously frozen by capa"),
+            (FORMAT_BINEXPORT2, "BinExport2"),
+            (FORMAT_BINJA_DB, "Binary Ninja Database"),
         ]
         format_help = ", ".join([f"{f[0]}: {f[1]}" for f in formats])
 
@@ -248,11 +283,15 @@ def install_common_args(parser, wanted=None):
         backends = [
             (BACKEND_AUTO, "(default) detect appropriate backend automatically"),
             (BACKEND_VIV, "vivisect"),
+            (BACKEND_IDA, "IDA via idalib"),
             (BACKEND_PEFILE, "pefile (file features only)"),
             (BACKEND_BINJA, "Binary Ninja"),
             (BACKEND_DOTNET, ".NET"),
+            (BACKEND_BINEXPORT2, "BinExport2"),
             (BACKEND_FREEZE, "capa freeze"),
             (BACKEND_CAPE, "CAPE"),
+            (BACKEND_DRAKVUF, "DRAKVUF"),
+            (BACKEND_VMRAY, "VMRay"),
         ]
         backend_help = ", ".join([f"{f[0]}: {f[1]}" for f in backends])
         parser.add_argument(
@@ -262,6 +301,22 @@ def install_common_args(parser, wanted=None):
             choices=[f[0] for f in backends],
             default=BACKEND_AUTO,
             help=f"select backend, {backend_help}",
+        )
+
+    if "restrict-to-functions" in wanted:
+        parser.add_argument(
+            "--restrict-to-functions",
+            type=lambda s: s.replace(" ", "").split(","),
+            default=[],
+            help="provide a list of comma-separated function virtual addresses to analyze (static analysis).",
+        )
+
+    if "restrict-to-processes" in wanted:
+        parser.add_argument(
+            "--restrict-to-processes",
+            type=lambda s: s.replace(" ", "").split(","),
+            default=[],
+            help="provide a list of comma-separated process IDs to analyze (dynamic analysis).",
         )
 
     if "os" in wanted:
@@ -349,14 +404,22 @@ def handle_common_args(args):
       ShouldExitError: if the program is invoked incorrectly and should exit.
     """
     if args.quiet:
-        logging.basicConfig(level=logging.WARNING)
         logging.getLogger().setLevel(logging.WARNING)
     elif args.debug:
-        logging.basicConfig(level=logging.DEBUG)
         logging.getLogger().setLevel(logging.DEBUG)
     else:
-        logging.basicConfig(level=logging.INFO)
         logging.getLogger().setLevel(logging.INFO)
+
+    # use [/] after the logger name to reset any styling,
+    # and prevent the color from carrying over to the message
+    logformat = "[dim]%(name)s[/]: %(message)s"
+
+    # set markup=True to allow the use of Rich's markup syntax in log messages
+    rich_handler = RichHandler(markup=True, show_time=False, show_path=True, console=capa.helpers.log_console)
+    rich_handler.setFormatter(logging.Formatter(logformat))
+
+    # use RichHandler for root logger
+    logging.getLogger().addHandler(rich_handler)
 
     # disable vivisect-related logging, it's verbose and not relevant for capa users
     set_vivisect_log_level(logging.CRITICAL)
@@ -390,19 +453,23 @@ def handle_common_args(args):
         raise RuntimeError("unexpected --color value: " + args.color)
 
     if not args.debug:
-        sys.excepthook = simple_message_exception_handler  # type: ignore[assignment]
+        sys.excepthook = simple_message_exception_handler
 
     if hasattr(args, "input_file"):
         args.input_file = Path(args.input_file)
 
     if hasattr(args, "rules"):
-        rules_paths: List[Path] = []
+        rules_paths: list[Path] = []
 
         if args.rules == [RULES_PATH_DEFAULT_STRING]:
             logger.debug("-" * 80)
             logger.debug(" Using default embedded rules.")
-            logger.debug(" To provide your own rules, use the form `capa.exe -r ./path/to/rules/  /path/to/mal.exe`.")
+            logger.debug(" To provide your own rules, use the form:")
+            logger.debug("")
+            logger.debug("     `capa.exe -r ./path/to/rules/  /path/to/mal.exe`.")
+            logger.debug("")
             logger.debug(" You can see the current default rule set here:")
+            logger.debug("")
             logger.debug("     https://github.com/mandiant/capa-rules")
             logger.debug("-" * 80)
 
@@ -505,11 +572,20 @@ def get_backend_from_cli(args, input_format: str) -> str:
     if input_format == FORMAT_CAPE:
         return BACKEND_CAPE
 
+    if input_format == FORMAT_DRAKVUF:
+        return BACKEND_DRAKVUF
+
+    elif input_format == FORMAT_VMRAY:
+        return BACKEND_VMRAY
+
     elif input_format == FORMAT_DOTNET:
         return BACKEND_DOTNET
 
     elif input_format == FORMAT_FREEZE:
         return BACKEND_FREEZE
+
+    elif input_format == FORMAT_BINEXPORT2:
+        return BACKEND_BINEXPORT2
 
     else:
         return BACKEND_VIV
@@ -529,8 +605,15 @@ def get_sample_path_from_cli(args, backend: str) -> Optional[Path]:
     raises:
       ShouldExitError: if the program is invoked incorrectly and should exit.
     """
-    if backend == BACKEND_CAPE:
+    if backend in (BACKEND_CAPE, BACKEND_DRAKVUF, BACKEND_VMRAY):
         return None
+    elif backend == BACKEND_BINEXPORT2:
+        import capa.features.extractors.binexport2
+
+        be2 = capa.features.extractors.binexport2.get_binexport2(args.input_file)
+        return capa.features.extractors.binexport2.get_sample_from_binexport2(
+            args.input_file, be2, [Path(os.environ.get("CAPA_SAMPLES_DIR", "."))]
+        )
     else:
         return args.input_file
 
@@ -565,13 +648,22 @@ def get_rules_from_cli(args) -> RuleSet:
     raises:
       ShouldExitError: if the program is invoked incorrectly and should exit.
     """
+    enable_cache: bool = True
     try:
         if capa.helpers.is_running_standalone() and args.is_default_rules:
             cache_dir = get_default_root() / "cache"
         else:
             cache_dir = capa.rules.cache.get_default_cache_directory()
 
-        rules = capa.rules.get_rules(args.rules, cache_dir=cache_dir)
+        if capa.helpers.is_dev_environment():
+            # using the rules cache during development may result in unexpected errors, see #1898
+            enable_cache = capa.helpers.is_cache_newer_than_rule_code(cache_dir)
+            if not enable_cache:
+                logger.debug("not using cache. delete the cache file manually to use rule caching again")
+            else:
+                logger.debug("cache can be used, no potentially outdated cache files found")
+
+        rules = capa.rules.get_rules(args.rules, cache_dir=cache_dir, enable_cache=enable_cache)
     except (IOError, capa.rules.InvalidRule, capa.rules.InvalidRuleSet) as e:
         logger.error("%s", str(e))
         logger.error(
@@ -605,7 +697,7 @@ def get_rules_from_cli(args) -> RuleSet:
     return rules
 
 
-def get_file_extractors_from_cli(args, input_format: str) -> List[FeatureExtractor]:
+def get_file_extractors_from_cli(args, input_format: str) -> list[FeatureExtractor]:
     """
     args:
       args: The parsed command line arguments from `install_common_args`.
@@ -632,32 +724,37 @@ def get_file_extractors_from_cli(args, input_format: str) -> List[FeatureExtract
     except UnsupportedFormatError as e:
         if input_format == FORMAT_CAPE:
             log_unsupported_cape_report_error(str(e))
+        elif input_format == FORMAT_DRAKVUF:
+            log_unsupported_drakvuf_report_error(str(e))
+        elif input_format == FORMAT_VMRAY:
+            log_unsupported_vmray_report_error(str(e))
         else:
             log_unsupported_format_error()
         raise ShouldExitError(E_INVALID_FILE_TYPE) from e
     except EmptyReportError as e:
         if input_format == FORMAT_CAPE:
-            log_empty_cape_report_error(str(e))
+            log_empty_sandbox_report_error(str(e), sandbox_name="CAPE")
+            raise ShouldExitError(E_EMPTY_REPORT) from e
+        elif input_format == FORMAT_DRAKVUF:
+            log_empty_sandbox_report_error(str(e), sandbox_name="DRAKVUF")
             raise ShouldExitError(E_EMPTY_REPORT) from e
         else:
             log_unsupported_format_error()
             raise ShouldExitError(E_INVALID_FILE_TYPE) from e
 
 
-def find_file_limitations_from_cli(args, rules: RuleSet, file_extractors: List[FeatureExtractor]) -> bool:
+def find_file_limitations_from_cli(args, rules: RuleSet, file_extractors: list[FeatureExtractor]) -> bool:
     """
     args:
       args: The parsed command line arguments from `install_common_args`.
+
+    Dynamic feature extractors can handle packed samples and do not need to be considered here.
 
     raises:
       ShouldExitError: if the program is invoked incorrectly and should exit.
     """
     found_file_limitation = False
     for file_extractor in file_extractors:
-        if isinstance(file_extractor, DynamicFeatureExtractor):
-            # Dynamic feature extractors can handle packed samples
-            continue
-
         try:
             pure_file_capabilities, _ = find_file_capabilities(rules, file_extractor, {})
         except PEFormatError as e:
@@ -679,7 +776,7 @@ def find_file_limitations_from_cli(args, rules: RuleSet, file_extractors: List[F
     return found_file_limitation
 
 
-def get_signatures_from_cli(args, input_format: str, backend: str) -> List[Path]:
+def get_signatures_from_cli(args, input_format: str, backend: str) -> list[Path]:
     if backend != BACKEND_VIV:
         logger.debug("skipping library code matching: only supported by the vivisect backend")
         return []
@@ -729,9 +826,13 @@ def get_extractor_from_cli(args, input_format: str, backend: str) -> FeatureExtr
 
     os_ = get_os_from_cli(args, backend)
     sample_path = get_sample_path_from_cli(args, backend)
+    extractor_filters = get_extractor_filters_from_cli(args, input_format)
+
+    logger.debug("format:  %s", input_format)
+    logger.debug("backend: %s", backend)
 
     try:
-        return capa.loader.get_extractor(
+        extractor = capa.loader.get_extractor(
             args.input_file,
             input_format,
             os_,
@@ -741,9 +842,14 @@ def get_extractor_from_cli(args, input_format: str, backend: str) -> FeatureExtr
             disable_progress=args.quiet or args.debug,
             sample_path=sample_path,
         )
+        return apply_extractor_filters(extractor, extractor_filters)
     except UnsupportedFormatError as e:
         if input_format == FORMAT_CAPE:
             log_unsupported_cape_report_error(str(e))
+        elif input_format == FORMAT_DRAKVUF:
+            log_unsupported_drakvuf_report_error(str(e))
+        elif input_format == FORMAT_VMRAY:
+            log_unsupported_vmray_report_error(str(e))
         else:
             log_unsupported_format_error()
         raise ShouldExitError(E_INVALID_FILE_TYPE) from e
@@ -753,11 +859,46 @@ def get_extractor_from_cli(args, input_format: str, backend: str) -> FeatureExtr
     except UnsupportedOSError as e:
         log_unsupported_os_error()
         raise ShouldExitError(E_INVALID_FILE_OS) from e
+    except capa.loader.CorruptFile as e:
+        logger.error("Input file '%s' is not a valid file: %s", args.input_file, str(e))
+        raise ShouldExitError(E_CORRUPT_FILE) from e
 
 
-def main(argv: Optional[List[str]] = None):
-    if sys.version_info < (3, 8):
-        raise UnsupportedRuntimeError("This version of capa can only be used with Python 3.8+")
+def get_extractor_filters_from_cli(args, input_format) -> FilterConfig:
+    if not hasattr(args, "restrict_to_processes") and not hasattr(args, "restrict_to_functions"):
+        # no processes or function filters were installed in the args
+        return {}
+
+    if input_format in STATIC_FORMATS:
+        if args.restrict_to_processes:
+            raise InvalidArgument("Cannot filter processes with static analysis.")
+        return {"functions": {int(addr, 0) for addr in args.restrict_to_functions}}
+    elif input_format in DYNAMIC_FORMATS:
+        if args.restrict_to_functions:
+            raise InvalidArgument("Cannot filter functions with dynamic analysis.")
+        return {"processes": {int(pid, 0) for pid in args.restrict_to_processes}}
+    else:
+        raise ShouldExitError(E_INVALID_INPUT_FORMAT)
+
+
+def apply_extractor_filters(extractor: FeatureExtractor, extractor_filters: FilterConfig):
+    if not any(extractor_filters.values()):
+        return extractor
+
+    # if the user specified extractor filters, then apply them here
+    if isinstance(extractor, StaticFeatureExtractor):
+        assert extractor_filters["functions"]
+        return FunctionFilter(extractor, extractor_filters["functions"])
+    elif isinstance(extractor, DynamicFeatureExtractor):
+        assert extractor_filters["processes"]
+        return ProcessFilter(extractor, extractor_filters["processes"])
+    else:
+        raise ShouldExitError(E_INVALID_FEATURE_EXTRACTOR)
+
+
+def main(argv: Optional[list[str]] = None):
+    if sys.version_info < (3, 10):
+        raise UnsupportedRuntimeError("This version of capa can only be used with Python 3.10+")
 
     if argv is None:
         argv = sys.argv[1:]
@@ -768,6 +909,9 @@ def main(argv: Optional[List[str]] = None):
         By default, capa uses a default set of embedded rules.
         You can see the rule set here:
           https://github.com/mandiant/capa-rules
+
+        You can load capa JSON output to capa Explorer Web:
+          https://github.com/mandiant/capa/explorer
 
         To provide your own rule set, use the `-r` flag:
           capa  --rules /path/to/rules  suspicious.exe
@@ -794,7 +938,20 @@ def main(argv: Optional[List[str]] = None):
     parser = argparse.ArgumentParser(
         description=desc, epilog=epilog, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    install_common_args(parser, {"input_file", "format", "backend", "os", "signatures", "rules", "tag"})
+    install_common_args(
+        parser,
+        {
+            "input_file",
+            "format",
+            "backend",
+            "os",
+            "signatures",
+            "rules",
+            "tag",
+            "restrict-to-functions",
+            "restrict-to-processes",
+        },
+    )
     parser.add_argument("-j", "--json", action="store_true", help="emit JSON instead of text")
     args = parser.parse_args(args=argv)
 
@@ -803,14 +960,17 @@ def main(argv: Optional[List[str]] = None):
         ensure_input_exists_from_cli(args)
         input_format = get_input_format_from_cli(args)
         rules = get_rules_from_cli(args)
-        file_extractors = get_file_extractors_from_cli(args, input_format)
-        found_file_limitation = find_file_limitations_from_cli(args, rules, file_extractors)
+        found_file_limitation = False
+        if input_format in STATIC_FORMATS:
+            # only static extractors have file limitations
+            file_extractors = get_file_extractors_from_cli(args, input_format)
+            found_file_limitation = find_file_limitations_from_cli(args, rules, file_extractors)
     except ShouldExitError as e:
         return e.status_code
 
     meta: rdoc.Metadata
     capabilities: MatchResults
-    counts: Dict[str, Any]
+    counts: dict[str, Any]
 
     if input_format == FORMAT_RESULT:
         # result document directly parses into meta, capabilities

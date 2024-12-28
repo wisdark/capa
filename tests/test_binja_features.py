@@ -36,7 +36,7 @@ except ImportError:
 @pytest.mark.skipif(binja_present is False, reason="Skip binja tests if the binaryninja Python API is not installed")
 @fixtures.parametrize(
     "sample,scope,feature,expected",
-    fixtures.FEATURE_PRESENCE_TESTS + fixtures.FEATURE_SYMTAB_FUNC_TESTS,
+    fixtures.FEATURE_PRESENCE_TESTS + fixtures.FEATURE_SYMTAB_FUNC_TESTS + fixtures.FEATURE_BINJA_DATABASE_TESTS,
     indirect=["sample", "scope"],
 )
 def test_binja_features(sample, scope, feature, expected):
@@ -63,4 +63,4 @@ def test_standalone_binja_backend():
 @pytest.mark.skipif(binja_present is False, reason="Skip binja tests if the binaryninja Python API is not installed")
 def test_binja_version():
     version = binaryninja.core_version_info()
-    assert version.major == 4 and version.minor == 0
+    assert version.major == 4 and version.minor == 2

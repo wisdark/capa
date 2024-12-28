@@ -7,8 +7,9 @@
 # See the License for the specific language governing permissions and limitations under the License.
 
 import logging
-from typing import Tuple, Iterator
+from typing import Iterator
 
+import capa.features.extractors.helpers
 from capa.helpers import assert_never
 from capa.features.insn import API, Number
 from capa.features.common import String, Feature
@@ -19,7 +20,7 @@ from capa.features.extractors.base_extractor import CallHandle, ThreadHandle, Pr
 logger = logging.getLogger(__name__)
 
 
-def extract_call_features(ph: ProcessHandle, th: ThreadHandle, ch: CallHandle) -> Iterator[Tuple[Feature, Address]]:
+def extract_call_features(ph: ProcessHandle, th: ThreadHandle, ch: CallHandle) -> Iterator[tuple[Feature, Address]]:
     """
     this method extracts the given call's features (such as API name and arguments),
     and returns them as API, Number, and String features.
@@ -50,10 +51,11 @@ def extract_call_features(ph: ProcessHandle, th: ThreadHandle, ch: CallHandle) -
         else:
             assert_never(value)
 
-    yield API(call.api), ch.address
+    for name in capa.features.extractors.helpers.generate_symbols("", call.api):
+        yield API(name), ch.address
 
 
-def extract_features(ph: ProcessHandle, th: ThreadHandle, ch: CallHandle) -> Iterator[Tuple[Feature, Address]]:
+def extract_features(ph: ProcessHandle, th: ThreadHandle, ch: CallHandle) -> Iterator[tuple[Feature, Address]]:
     for handler in CALL_HANDLERS:
         for feature, addr in handler(ph, th, ch):
             yield feature, addr

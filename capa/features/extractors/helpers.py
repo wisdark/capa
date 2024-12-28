@@ -8,7 +8,7 @@
 
 import struct
 import builtins
-from typing import Tuple, Iterator
+from typing import Iterator
 
 MIN_STACKSTRING_LEN = 8
 
@@ -63,6 +63,7 @@ def generate_symbols(dll: str, symbol: str, include_dll=False) -> Iterator[str]:
     # trim extensions observed in dynamic traces
     dll = dll[0:-4] if dll.endswith(".dll") else dll
     dll = dll[0:-4] if dll.endswith(".drv") else dll
+    dll = dll[0:-3] if dll.endswith(".so") else dll
 
     if include_dll or is_ordinal(symbol):
         # ws2_32.#1
@@ -118,7 +119,7 @@ def twos_complement(val: int, bits: int) -> int:
         return val
 
 
-def carve_pe(pbytes: bytes, offset: int = 0) -> Iterator[Tuple[int, int]]:
+def carve_pe(pbytes: bytes, offset: int = 0) -> Iterator[tuple[int, int]]:
     """
     Generate (offset, key) tuples of embedded PEs
 

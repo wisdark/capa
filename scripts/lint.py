@@ -27,15 +27,12 @@ import logging
 import argparse
 import itertools
 import posixpath
-from typing import Set, Dict, List
 from pathlib import Path
 from dataclasses import field, dataclass
 
-import tqdm
 import pydantic
-import termcolor
 import ruamel.yaml
-import tqdm.contrib.logging
+from rich import print
 
 import capa.main
 import capa.rules
@@ -51,18 +48,6 @@ from capa.render.result_document import RuleMetadata
 logger = logging.getLogger("lint")
 
 
-def red(s):
-    return termcolor.colored(s, "red")
-
-
-def orange(s):
-    return termcolor.colored(s, "yellow")
-
-
-def green(s):
-    return termcolor.colored(s, "green")
-
-
 @dataclass
 class Context:
     """
@@ -73,15 +58,15 @@ class Context:
       capabilities_by_sample: cache of results, indexed by file path.
     """
 
-    samples: Dict[str, Path]
+    samples: dict[str, Path]
     rules: RuleSet
     is_thorough: bool
-    capabilities_by_sample: Dict[Path, Set[str]] = field(default_factory=dict)
+    capabilities_by_sample: dict[Path, set[str]] = field(default_factory=dict)
 
 
 class Lint:
-    WARN = orange("WARN")
-    FAIL = red("FAIL")
+    WARN = "[yellow]WARN[/yellow]"
+    FAIL = "[red]FAIL[/red]"
 
     name = "lint"
     level = FAIL
@@ -344,7 +329,7 @@ class InvalidAttckOrMbcTechnique(Lint):
 DEFAULT_SIGNATURES = capa.main.get_default_signatures()
 
 
-def get_sample_capabilities(ctx: Context, path: Path) -> Set[str]:
+def get_sample_capabilities(ctx: Context, path: Path) -> set[str]:
     nice_path = path.resolve().absolute()
     if path in ctx.capabilities_by_sample:
         logger.debug("found cached results: %s: %d capabilities", nice_path, len(ctx.capabilities_by_sample[path]))
@@ -555,7 +540,7 @@ class FeatureStringTooShort(Lint):
     name = "feature string too short"
     recommendation = 'capa only extracts strings with length >= 4; will not match on "{:s}"'
 
-    def check_features(self, ctx: Context, features: List[Feature]):
+    def check_features(self, ctx: Context, features: list[Feature]):
         for feature in features:
             if isinstance(feature, (String, Substring)):
                 assert isinstance(feature.value, str)
@@ -573,7 +558,7 @@ class FeatureNegativeNumber(Lint):
         + 'representation; will not match on "{:d}"'
     )
 
-    def check_features(self, ctx: Context, features: List[Feature]):
+    def check_features(self, ctx: Context, features: list[Feature]):
         for feature in features:
             if isinstance(feature, (capa.features.insn.Number,)):
                 assert isinstance(feature.value, int)
@@ -591,7 +576,7 @@ class FeatureNtdllNtoskrnlApi(Lint):
         + "module requirement to improve detection"
     )
 
-    def check_features(self, ctx: Context, features: List[Feature]):
+    def check_features(self, ctx: Context, features: list[Feature]):
         for feature in features:
             if isinstance(feature, capa.features.insn.API):
                 assert isinstance(feature.value, str)
@@ -726,7 +711,7 @@ def run_lints(lints, ctx: Context, rule: Rule):
             yield lint
 
 
-def run_feature_lints(lints, ctx: Context, features: List[Feature]):
+def run_feature_lints(lints, ctx: Context, features: list[Feature]):
     for lint in lints:
         if lint.check_features(ctx, features):
             yield lint
@@ -896,7 +881,7 @@ def lint_rule(ctx: Context, rule: Rule):
         if (not lints_failed) and (not lints_warned) and has_examples:
             print("")
             print(f'{"    (nursery) " if is_nursery_rule(rule) else ""} {rule.name}')
-            print(f"      {Lint.WARN}: {green('no lint failures')}: Graduate the rule")
+            print(f"      {Lint.WARN}: '[green]no lint failures[/green]': Graduate the rule")
             print("")
     else:
         lints_failed = len(tuple(filter(lambda v: v.level == Lint.FAIL, violations)))
@@ -914,24 +899,27 @@ def width(s, count):
 
 def lint(ctx: Context):
     """
-    Returns: Dict[string, Tuple(int, int)]
+    Returns: dict[string, tuple(int, int)]
       - # lints failed
       - # lints warned
     """
     ret = {}
 
     source_rules = [rule for rule in ctx.rules.rules.values() if not rule.is_subscope_rule()]
-    with tqdm.contrib.logging.tqdm_logging_redirect(source_rules, unit="rule", leave=False) as pbar:
-        with capa.helpers.redirecting_print_to_tqdm(False):
-            for rule in pbar:
-                name = rule.name
-                pbar.set_description(width(f"linting rule: {name}", 48))
-                ret[name] = lint_rule(ctx, rule)
+    n_rules: int = len(source_rules)
+
+    with capa.helpers.CapaProgressBar(transient=True, console=capa.helpers.log_console) as pbar:
+        task = pbar.add_task(description="linting", total=n_rules, unit="rule")
+        for rule in source_rules:
+            name = rule.name
+            pbar.update(task, description=width(f"linting rule: {name}", 48))
+            ret[name] = lint_rule(ctx, rule)
+            pbar.advance(task)
 
     return ret
 
 
-def collect_samples(samples_path: Path) -> Dict[str, Path]:
+def collect_samples(samples_path: Path) -> dict[str, Path]:
     """
     recurse through the given path, collecting all file paths, indexed by their content sha256, md5, and filename.
     """
@@ -1020,18 +1008,18 @@ def main(argv=None):
     logger.debug("lints ran for ~ %02d:%02dm", min, sec)
 
     if warned_rules:
-        print(orange("rules with WARN:"))
+        print("[yellow]rules with WARN:[/yellow]")
         for warned_rule in sorted(warned_rules):
             print("  - " + warned_rule)
         print()
 
     if failed_rules:
-        print(red("rules with FAIL:"))
+        print("[red]rules with FAIL:[/red]")
         for failed_rule in sorted(failed_rules):
             print("  - " + failed_rule)
         return 1
     else:
-        logger.info(green("no lints failed, nice!"))
+        logger.info("[green]no lints failed, nice![/green]")
         return 0
 
 

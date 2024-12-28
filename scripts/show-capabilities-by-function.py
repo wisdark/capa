@@ -59,7 +59,6 @@ import sys
 import logging
 import argparse
 import collections
-from typing import Dict
 
 import colorama
 
@@ -99,7 +98,7 @@ def render_matches_by_function(doc: rd.ResultDocument):
           - connect to HTTP server
     """
     assert isinstance(doc.meta.analysis, rd.StaticAnalysis)
-    functions_by_bb: Dict[Address, Address] = {}
+    functions_by_bb: dict[Address, Address] = {}
     for finfo in doc.meta.analysis.layout.functions:
         faddress = finfo.address
 
@@ -125,7 +124,7 @@ def render_matches_by_function(doc: rd.ResultDocument):
     for f in doc.meta.analysis.feature_counts.functions:
         if not matches_by_function.get(f.address, {}):
             continue
-        ostream.writeln(f"function at {capa.render.verbose.format_address(addr)} with {f.count} features: ")
+        ostream.writeln(f"function at {capa.render.verbose.format_address(f.address)} with {f.count} features: ")
         for rule_name in sorted(matches_by_function[f.address]):
             ostream.writeln("  - " + rule_name)
 

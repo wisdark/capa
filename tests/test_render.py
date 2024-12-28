@@ -5,6 +5,7 @@
 # Unless required by applicable law or agreed to in writing, software distributed under the License
 #  is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and limitations under the License.
+import io
 import textwrap
 from unittest.mock import Mock
 
@@ -22,6 +23,7 @@ import capa.features.basicblock
 import capa.render.result_document
 import capa.render.result_document as rd
 import capa.features.freeze.features
+from capa.render.utils import Console
 
 
 def test_render_number():
@@ -151,9 +153,10 @@ def test_render_meta_maec():
     mock_rd.rules = {"test rule": rm}
 
     # capture the output of render_maec
-    output_stream = capa.render.utils.StringIO()
-    capa.render.default.render_maec(mock_rd, output_stream)
-    output = output_stream.getvalue()
+    f = io.StringIO()
+    console = Console(file=f)
+    capa.render.default.render_maec(mock_rd, console)
+    output = f.getvalue()
 
     assert "analysis-conclusion" in output
     assert analysis_conclusion in output
@@ -195,7 +198,7 @@ def test_render_meta_maec():
     ],
 )
 def test_render_vverbose_feature(feature, expected):
-    ostream = capa.render.utils.StringIO()
+    console = Console(highlight=False)
 
     addr = capa.features.freeze.Address.from_capa(capa.features.address.AbsoluteVirtualAddress(0x401000))
     feature = capa.features.freeze.features.feature_from_capa(feature)
@@ -237,6 +240,8 @@ def test_render_vverbose_feature(feature, expected):
         matches=(),
     )
 
-    capa.render.vverbose.render_feature(ostream, layout, rm, matches, feature, indent=0)
+    with console.capture() as capture:
+        capa.render.vverbose.render_feature(console, layout, rm, matches, feature, indent=0)
 
-    assert ostream.getvalue().strip() == expected
+    output = capture.get().strip()
+    assert output == expected

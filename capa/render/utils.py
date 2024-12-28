@@ -7,30 +7,31 @@
 # See the License for the specific language governing permissions and limitations under the License.
 
 import io
-from typing import Dict, List, Tuple, Union, Iterator, Optional
+from typing import Union, Iterator, Optional
 
-import termcolor
+import rich.console
+from rich.progress import Text
 
 import capa.render.result_document as rd
 
 
-def bold(s: str) -> str:
+def bold(s: str) -> Text:
     """draw attention to the given string"""
-    return termcolor.colored(s, "cyan")
+    return Text.from_markup(f"[cyan]{s}")
 
 
-def bold2(s: str) -> str:
+def bold2(s: str) -> Text:
     """draw attention to the given string, within a `bold` section"""
-    return termcolor.colored(s, "green")
+    return Text.from_markup(f"[green]{s}")
 
 
-def mute(s: str) -> str:
+def mute(s: str) -> Text:
     """draw attention away from the given string"""
-    return termcolor.colored(s, "dark_grey")
+    return Text.from_markup(f"[dim]{s}")
 
 
-def warn(s: str) -> str:
-    return termcolor.colored(s, "yellow")
+def warn(s: str) -> Text:
+    return Text.from_markup(f"[yellow]{s}")
 
 
 def format_parts_id(data: Union[rd.AttackSpec, rd.MBCSpec]):
@@ -40,7 +41,7 @@ def format_parts_id(data: Union[rd.AttackSpec, rd.MBCSpec]):
     return f"{'::'.join(data.parts)} [{data.id}]"
 
 
-def sort_rules(rules: Dict[str, rd.RuleMatches]) -> List[Tuple[Optional[str], str, rd.RuleMatches]]:
+def sort_rules(rules: dict[str, rd.RuleMatches]) -> list[tuple[Optional[str], str, rd.RuleMatches]]:
     """Sort rules by namespace and name."""
     return sorted((rule.meta.namespace or "", rule.meta.name, rule) for rule in rules.values())
 
@@ -85,3 +86,17 @@ class StringIO(io.StringIO):
     def writeln(self, s):
         self.write(s)
         self.write("\n")
+
+
+class Console(rich.console.Console):
+    def writeln(self, *args, **kwargs) -> None:
+        """
+        prints the text with a new line at the end.
+        """
+        return self.print(*args, **kwargs)
+
+    def write(self, *args, **kwargs) -> None:
+        """
+        prints the text without a new line at the end.
+        """
+        return self.print(*args, **kwargs, end="")

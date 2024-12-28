@@ -5,11 +5,12 @@
 # Unless required by applicable law or agreed to in writing, software distributed under the License
 #  is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and limitations under the License.
-import sys
+import io
+import os
 import logging
 import datetime
 import contextlib
-from typing import Set, Dict, List, Optional
+from typing import Optional
 from pathlib import Path
 
 from rich.console import Console
@@ -44,7 +45,11 @@ from capa.features.common import (
     FORMAT_CAPE,
     FORMAT_SC32,
     FORMAT_SC64,
+    FORMAT_VMRAY,
     FORMAT_DOTNET,
+    FORMAT_DRAKVUF,
+    FORMAT_BINJA_DB,
+    FORMAT_BINEXPORT2,
 )
 from capa.features.address import Address
 from capa.features.extractors.base_extractor import (
@@ -61,7 +66,15 @@ BACKEND_DOTNET = "dotnet"
 BACKEND_BINJA = "binja"
 BACKEND_PEFILE = "pefile"
 BACKEND_CAPE = "cape"
+BACKEND_DRAKVUF = "drakvuf"
+BACKEND_VMRAY = "vmray"
 BACKEND_FREEZE = "freeze"
+BACKEND_BINEXPORT2 = "binexport2"
+BACKEND_IDA = "ida"
+
+
+class CorruptFile(ValueError):
+    pass
 
 
 def is_supported_format(sample: Path) -> bool:
@@ -116,7 +129,7 @@ def get_meta_str(vw):
     return f"{', '.join(meta)}, number of functions: {len(vw.getFunctions())}"
 
 
-def get_workspace(path: Path, input_format: str, sigpaths: List[Path]):
+def get_workspace(path: Path, input_format: str, sigpaths: list[Path]):
     """
     load the program at the given path into a vivisect workspace using the given format.
     also apply the given FLIRT signatures.
@@ -137,21 +150,29 @@ def get_workspace(path: Path, input_format: str, sigpaths: List[Path]):
     import viv_utils.flirt
 
     logger.debug("generating vivisect workspace for: %s", path)
-    if input_format == FORMAT_AUTO:
-        if not is_supported_format(path):
-            raise UnsupportedFormatError()
 
-        # don't analyze, so that we can add our Flirt function analyzer first.
-        vw = viv_utils.getWorkspace(str(path), analyze=False, should_save=False)
-    elif input_format in {FORMAT_PE, FORMAT_ELF}:
-        vw = viv_utils.getWorkspace(str(path), analyze=False, should_save=False)
-    elif input_format == FORMAT_SC32:
-        # these are not analyzed nor saved.
-        vw = viv_utils.getShellcodeWorkspaceFromFile(str(path), arch="i386", analyze=False)
-    elif input_format == FORMAT_SC64:
-        vw = viv_utils.getShellcodeWorkspaceFromFile(str(path), arch="amd64", analyze=False)
-    else:
-        raise ValueError("unexpected format: " + input_format)
+    try:
+        if input_format == FORMAT_AUTO:
+            if not is_supported_format(path):
+                raise UnsupportedFormatError()
+
+            # don't analyze, so that we can add our Flirt function analyzer first.
+            vw = viv_utils.getWorkspace(str(path), analyze=False, should_save=False)
+        elif input_format in {FORMAT_PE, FORMAT_ELF}:
+            vw = viv_utils.getWorkspace(str(path), analyze=False, should_save=False)
+        elif input_format == FORMAT_SC32:
+            # these are not analyzed nor saved.
+            vw = viv_utils.getShellcodeWorkspaceFromFile(str(path), arch="i386", analyze=False)
+        elif input_format == FORMAT_SC64:
+            vw = viv_utils.getShellcodeWorkspaceFromFile(str(path), arch="amd64", analyze=False)
+        else:
+            raise ValueError("unexpected format: " + input_format)
+    except Exception as e:
+        # vivisect raises raw Exception instances, and we don't want
+        # to do a subclass check via isinstance.
+        if type(e) is Exception and "Couldn't convert rva" in e.args[0]:
+            raise CorruptFile(e.args[0]) from e
+        raise
 
     viv_utils.flirt.register_flirt_signature_analyzers(vw, [str(s) for s in sigpaths])
 
@@ -178,7 +199,7 @@ def get_extractor(
     input_format: str,
     os_: str,
     backend: str,
-    sigpaths: List[Path],
+    sigpaths: list[Path],
     should_save_workspace=False,
     disable_progress=False,
     sample_path: Optional[Path] = None,
@@ -199,6 +220,17 @@ def get_extractor(
         report = capa.helpers.load_json_from_path(input_path)
         return capa.features.extractors.cape.extractor.CapeExtractor.from_report(report)
 
+    elif backend == BACKEND_DRAKVUF:
+        import capa.features.extractors.drakvuf.extractor
+
+        report = capa.helpers.load_jsonl_from_path(input_path)
+        return capa.features.extractors.drakvuf.extractor.DrakvufExtractor.from_report(report)
+
+    elif backend == BACKEND_VMRAY:
+        import capa.features.extractors.vmray.extractor
+
+        return capa.features.extractors.vmray.extractor.VMRayExtractor.from_zipfile(input_path)
+
     elif backend == BACKEND_DOTNET:
         import capa.features.extractors.dnfile.extractor
 
@@ -208,28 +240,19 @@ def get_extractor(
         return capa.features.extractors.dnfile.extractor.DnfileFeatureExtractor(input_path)
 
     elif backend == BACKEND_BINJA:
-        import capa.helpers
-        from capa.features.extractors.binja.find_binja_api import find_binja_path
+        import capa.features.extractors.binja.find_binja_api as finder
 
-        # When we are running as a standalone executable, we cannot directly import binaryninja
-        # We need to fist find the binja API installation path and add it into sys.path
-        if capa.helpers.is_running_standalone():
-            bn_api = find_binja_path()
-            if bn_api.exists():
-                sys.path.append(str(bn_api))
+        if not finder.has_binaryninja():
+            raise RuntimeError("cannot find Binary Ninja API module.")
 
-        try:
-            import binaryninja
-            from binaryninja import BinaryView
-        except ImportError:
-            raise RuntimeError(
-                "Cannot import binaryninja module. Please install the Binary Ninja Python API first: "
-                + "https://docs.binary.ninja/dev/batch.html#install-the-api)."
-            )
+        if not finder.load_binaryninja():
+            raise RuntimeError("failed to load Binary Ninja API module.")
+
+        import binaryninja
 
         import capa.features.extractors.binja.extractor
 
-        if input_format not in (FORMAT_SC32, FORMAT_SC64):
+        if input_format not in (FORMAT_SC32, FORMAT_SC64, FORMAT_BINJA_DB):
             if not is_supported_format(input_path):
                 raise UnsupportedFormatError()
 
@@ -240,7 +263,7 @@ def get_extractor(
                 raise UnsupportedOSError()
 
         with console.status("analyzing program...", spinner="dots"):
-            bv: BinaryView = binaryninja.load(str(input_path))
+            bv: binaryninja.BinaryView = binaryninja.load(str(input_path))
             if bv is None:
                 raise RuntimeError(f"Binary Ninja cannot open file {input_path}")
 
@@ -282,12 +305,72 @@ def get_extractor(
     elif backend == BACKEND_FREEZE:
         return frz.load(input_path.read_bytes())
 
+    elif backend == BACKEND_BINEXPORT2:
+        import capa.features.extractors.binexport2
+        import capa.features.extractors.binexport2.extractor
+
+        be2 = capa.features.extractors.binexport2.get_binexport2(input_path)
+        assert sample_path is not None
+        buf = sample_path.read_bytes()
+
+        return capa.features.extractors.binexport2.extractor.BinExport2FeatureExtractor(be2, buf)
+
+    elif backend == BACKEND_IDA:
+        import capa.features.extractors.ida.idalib as idalib
+
+        if not idalib.has_idalib():
+            raise RuntimeError("cannot find IDA idalib module.")
+
+        if not idalib.load_idalib():
+            raise RuntimeError("failed to load IDA idalib module.")
+
+        import idapro
+        import ida_auto
+
+        import capa.features.extractors.ida.extractor
+
+        logger.debug("idalib: opening database...")
+        # idalib writes to stdout (ugh), so we have to capture that
+        # so as not to screw up structured output.
+        with capa.helpers.stdout_redirector(io.BytesIO()):
+            with console.status("analyzing program...", spinner="dots"):
+                if idapro.open_database(str(input_path), run_auto_analysis=True):
+                    raise RuntimeError("failed to analyze input file")
+
+            logger.debug("idalib: waiting for analysis...")
+            ida_auto.auto_wait()
+            logger.debug("idalib: opened database.")
+
+        return capa.features.extractors.ida.extractor.IdaFeatureExtractor()
+
     else:
         raise ValueError("unexpected backend: " + backend)
 
 
-def get_file_extractors(input_file: Path, input_format: str) -> List[FeatureExtractor]:
-    file_extractors: List[FeatureExtractor] = []
+def _get_binexport2_file_extractors(input_file: Path) -> list[FeatureExtractor]:
+    # I'm not sure this is where this logic should live, but it works for now.
+    # we'll keep this a "private" routine until we're sure.
+    import capa.features.extractors.binexport2
+
+    be2 = capa.features.extractors.binexport2.get_binexport2(input_file)
+    sample_path = capa.features.extractors.binexport2.get_sample_from_binexport2(
+        input_file, be2, [Path(os.environ.get("CAPA_SAMPLES_DIR", "."))]
+    )
+
+    with sample_path.open("rb") as f:
+        taste = f.read()
+
+    if taste.startswith(capa.features.extractors.common.MATCH_PE):
+        return get_file_extractors(sample_path, FORMAT_PE)
+    elif taste.startswith(capa.features.extractors.common.MATCH_ELF):
+        return get_file_extractors(sample_path, FORMAT_ELF)
+    else:
+        logger.warning("unsupported format")
+        return []
+
+
+def get_file_extractors(input_file: Path, input_format: str) -> list[FeatureExtractor]:
+    file_extractors: list[FeatureExtractor] = []
 
     # we use lazy importing here to avoid eagerly loading dependencies
     # that some specialized environments may not have,
@@ -316,14 +399,29 @@ def get_file_extractors(input_file: Path, input_format: str) -> List[FeatureExtr
         report = capa.helpers.load_json_from_path(input_file)
         file_extractors.append(capa.features.extractors.cape.extractor.CapeExtractor.from_report(report))
 
+    elif input_format == FORMAT_DRAKVUF:
+        import capa.helpers
+        import capa.features.extractors.drakvuf.extractor
+
+        report = capa.helpers.load_jsonl_from_path(input_file)
+        file_extractors.append(capa.features.extractors.drakvuf.extractor.DrakvufExtractor.from_report(report))
+
+    elif input_format == FORMAT_VMRAY:
+        import capa.features.extractors.vmray.extractor
+
+        file_extractors.append(capa.features.extractors.vmray.extractor.VMRayExtractor.from_zipfile(input_file))
+
+    elif input_format == FORMAT_BINEXPORT2:
+        file_extractors = _get_binexport2_file_extractors(input_file)
+
     return file_extractors
 
 
-def get_signatures(sigs_path: Path) -> List[Path]:
+def get_signatures(sigs_path: Path) -> list[Path]:
     if not sigs_path.exists():
         raise IOError(f"signatures path {sigs_path} does not exist or cannot be accessed")
 
-    paths: List[Path] = []
+    paths: list[Path] = []
     if sigs_path.is_file():
         paths.append(sigs_path)
     elif sigs_path.is_dir():
@@ -381,11 +479,11 @@ def get_sample_analysis(format_, arch, os_, extractor, rules_path, counts):
 
 
 def collect_metadata(
-    argv: List[str],
+    argv: list[str],
     input_path: Path,
     input_format: str,
     os_: str,
-    rules_path: List[Path],
+    rules_path: list[Path],
     extractor: FeatureExtractor,
     counts: dict,
 ) -> rdoc.Metadata:
@@ -448,7 +546,7 @@ def compute_dynamic_layout(
     """
     assert isinstance(extractor, DynamicFeatureExtractor)
 
-    matched_calls: Set[Address] = set()
+    matched_calls: set[Address] = set()
 
     def result_rec(result: capa.features.common.Result):
         for loc in result.locations:
@@ -461,14 +559,14 @@ def compute_dynamic_layout(
         for _, result in matches:
             result_rec(result)
 
-    names_by_process: Dict[Address, str] = {}
-    names_by_call: Dict[Address, str] = {}
+    names_by_process: dict[Address, str] = {}
+    names_by_call: dict[Address, str] = {}
 
-    matched_processes: Set[Address] = set()
-    matched_threads: Set[Address] = set()
+    matched_processes: set[Address] = set()
+    matched_threads: set[Address] = set()
 
-    threads_by_process: Dict[Address, List[Address]] = {}
-    calls_by_thread: Dict[Address, List[Address]] = {}
+    threads_by_process: dict[Address, list[Address]] = {}
+    calls_by_thread: dict[Address, list[Address]] = {}
 
     for p in extractor.get_processes():
         threads_by_process[p.address] = []
@@ -528,8 +626,8 @@ def compute_static_layout(rules: RuleSet, extractor: StaticFeatureExtractor, cap
     otherwise, we may pollute the json document with
     a large amount of un-referenced data.
     """
-    functions_by_bb: Dict[Address, Address] = {}
-    bbs_by_function: Dict[Address, List[Address]] = {}
+    functions_by_bb: dict[Address, Address] = {}
+    bbs_by_function: dict[Address, list[Address]] = {}
     for f in extractor.get_functions():
         bbs_by_function[f.address] = []
         for bb in extractor.get_basic_blocks(f):

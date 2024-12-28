@@ -1,4 +1,16 @@
-![capa](https://github.com/mandiant/capa/blob/master/.github/logo.png)
+<br />
+<div align="center">
+<a href="https://mandiant.github.io/capa/" target="_blank">
+  <img src="https://github.com/mandiant/capa/blob/master/.github/logo.png">
+</a>
+<p align="center">
+  <a href="https://mandiant.github.io/capa/" target="_blank">Website</a>
+  |
+  <a href="https://github.com/mandiant/capa/releases/latest" target="_blank">Download</a>
+  |
+  <a href="https://mandiant.github.io/capa/explorer/" target="_blank">Web Interface</a>
+</p>
+<div align="center">
 
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/flare-capa)](https://pypi.org/project/flare-capa)
 [![Last release](https://img.shields.io/github/v/release/mandiant/capa)](https://github.com/mandiant/capa/releases)
@@ -7,63 +19,66 @@
 [![Downloads](https://img.shields.io/github/downloads/mandiant/capa/total)](https://github.com/mandiant/capa/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE.txt)
 
+</div>
+</div>
+
+---
+
 capa detects capabilities in executable files.
 You run it against a PE, ELF, .NET module, shellcode file, or a sandbox report and it tells you what it thinks the program can do.
 For example, it might suggest that the file is a backdoor, is capable of installing services, or relies on HTTP to communicate.
 
-Check out our capa blog posts:
-- [Dynamic capa: Exploring Executable Run-Time Behavior with the CAPE Sandbox](https://www.mandiant.com/resources/blog/dynamic-capa-executable-behavior-cape-sandbox)
-- [capa v4: casting a wider .NET](https://www.mandiant.com/resources/blog/capa-v4-casting-wider-net) (.NET support)
-- [ELFant in the Room – capa v3](https://www.mandiant.com/resources/elfant-in-the-room-capa-v3) (ELF support)
-- [capa 2.0: Better, Stronger, Faster](https://www.mandiant.com/resources/capa-2-better-stronger-faster)
-- [capa: Automatically Identify Malware Capabilities](https://www.mandiant.com/resources/capa-automatically-identify-malware-capabilities)
+To interactively inspect capa results in your browser use the [capa Explorer Web](https://mandiant.github.io/capa/explorer/).
 
+If you want to inspect or write capa rules, head on over to the [capa-rules repository](https://github.com/mandiant/capa-rules). Otherwise, keep reading.
+
+Below you find a list of [our capa blog posts with more details.](#blog-posts)
+
+# example capa output
 ```
 $ capa.exe suspicious.exe
 
-+------------------------+--------------------------------------------------------------------------------+
-| ATT&CK Tactic          | ATT&CK Technique                                                               |
-|------------------------+--------------------------------------------------------------------------------|
-| DEFENSE EVASION        | Obfuscated Files or Information [T1027]                                        |
-| DISCOVERY              | Query Registry [T1012]                                                         |
-|                        | System Information Discovery [T1082]                                           |
-| EXECUTION              | Command and Scripting Interpreter::Windows Command Shell [T1059.003]           |
-|                        | Shared Modules [T1129]                                                         |
-| EXFILTRATION           | Exfiltration Over C2 Channel [T1041]                                           |
-| PERSISTENCE            | Create or Modify System Process::Windows Service [T1543.003]                   |
-+------------------------+--------------------------------------------------------------------------------+
++--------------------+------------------------------------------------------------------------+
+| ATT&CK Tactic      | ATT&CK Technique                                                       |
+|--------------------+------------------------------------------------------------------------|
+| DEFENSE EVASION    | Obfuscated Files or Information [T1027]                                |
+| DISCOVERY          | Query Registry [T1012]                                                 |
+|                    | System Information Discovery [T1082]                                   |
+| EXECUTION          | Command and Scripting Interpreter::Windows Command Shell [T1059.003]   |
+|                    | Shared Modules [T1129]                                                 |
+| EXFILTRATION       | Exfiltration Over C2 Channel [T1041]                                   |
+| PERSISTENCE        | Create or Modify System Process::Windows Service [T1543.003]           |
++--------------------+------------------------------------------------------------------------+
 
-+-------------------------------------------------------+-------------------------------------------------+
-| CAPABILITY                                            | NAMESPACE                                       |
-|-------------------------------------------------------+-------------------------------------------------|
-| check for OutputDebugString error                     | anti-analysis/anti-debugging/debugger-detection |
-| read and send data from client to server              | c2/file-transfer                                |
-| execute shell command and capture output              | c2/shell                                        |
-| receive data (2 matches)                              | communication                                   |
-| send data (6 matches)                                 | communication                                   |
-| connect to HTTP server (3 matches)                    | communication/http/client                       |
-| send HTTP request (3 matches)                         | communication/http/client                       |
-| create pipe                                           | communication/named-pipe/create                 |
-| get socket status (2 matches)                         | communication/socket                            |
-| receive data on socket (2 matches)                    | communication/socket/receive                    |
-| send data on socket (3 matches)                       | communication/socket/send                       |
-| connect TCP socket                                    | communication/socket/tcp                        |
-| encode data using Base64                              | data-manipulation/encoding/base64               |
-| encode data using XOR (6 matches)                     | data-manipulation/encoding/xor                  |
-| run as a service                                      | executable/pe                                   |
-| get common file path (3 matches)                      | host-interaction/file-system                    |
-| read file                                             | host-interaction/file-system/read               |
-| write file (2 matches)                                | host-interaction/file-system/write              |
-| print debug messages (2 matches)                      | host-interaction/log/debug/write-event          |
-| resolve DNS                                           | host-interaction/network/dns/resolve            |
-| get hostname                                          | host-interaction/os/hostname                    |
-| create a process with modified I/O handles and window | host-interaction/process/create                 |
-| create process                                        | host-interaction/process/create                 |
-| create registry key                                   | host-interaction/registry/create                |
-| create service                                        | host-interaction/service/create                 |
-| create thread                                         | host-interaction/thread/create                  |
-| persist via Windows service                           | persistence/service                             |
-+-------------------------------------------------------+-------------------------------------------------+
++-------------------------------------------+-------------------------------------------------+
+| CAPABILITY                                | NAMESPACE                                       |
+|-------------------------------------------+-------------------------------------------------|
+| read and send data from client to server  | c2/file-transfer                               |
+| execute shell command and capture output  | c2/shell                                       |
+| receive data (2 matches)                  | communication                                   |
+| send data (6 matches)                     | communication                                   |
+| connect to HTTP server (3 matches)        | communication/http/client                       |
+| send HTTP request (3 matches)             | communication/http/client                       |
+| create pipe                               | communication/named-pipe/create                 |
+| get socket status (2 matches)             | communication/socket                            |
+| receive data on socket (2 matches)        | communication/socket/receive                    |
+| send data on socket (3 matches)           | communication/socket/send                       |
+| connect TCP socket                        | communication/socket/tcp                        |
+| encode data using Base64                  | data-manipulation/encoding/base64               |
+| encode data using XOR (6 matches)         | data-manipulation/encoding/xor                  |
+| run as a service                          | executable/pe                                   |
+| get common file path (3 matches)          | host-interaction/file-system                    |
+| read file                                 | host-interaction/file-system/read               |
+| write file (2 matches)                    | host-interaction/file-system/write              |
+| print debug messages (2 matches)          | host-interaction/log/debug/write-event          |
+| resolve DNS                               | host-interaction/network/dns/resolve            |
+| get hostname                              | host-interaction/os/hostname                    |
+| create process                            | host-interaction/process/create                 |
+| create registry key                       | host-interaction/registry/create                |
+| create service                            | host-interaction/service/create                 |
+| create thread                             | host-interaction/thread/create                  |
+| persist via Windows service               | persistence/service                             |
++-------------------------------------------+-------------------------------------------------+
 ```
 
 # download and usage
@@ -72,15 +87,22 @@ Download stable releases of the standalone capa binaries [here](https://github.c
 
 To use capa as a library or integrate with another tool, see [doc/installation.md](https://github.com/mandiant/capa/blob/master/doc/installation.md) for further setup instructions.
 
-For more information about how to use capa, see [doc/usage.md](https://github.com/mandiant/capa/blob/master/doc/usage.md).
+# capa Explorer Web
+The [capa Explorer Web](https://mandiant.github.io/capa/explorer/) enables you to interactively explore capa results in your web browser. Besides the online version you can download a standalone HTML file for local offline usage.
+
+![capa Explorer Web screenshot](https://github.com/mandiant/capa/blob/master/doc/img/capa_web_explorer.png)
+
+More details on the web UI is available in the [capa Explorer Web README](https://github.com/mandiant/capa/blob/master/web/explorer/README.md).
 
 # example
 
-In the above sample output, we ran capa against an unknown binary (`suspicious.exe`),
-and the tool reported that the program can send HTTP requests, decode data via XOR and Base64,
+In the above sample output, we run capa against an unknown binary (`suspicious.exe`),
+and the tool reports that the program can send HTTP requests, decode data via XOR and Base64,
 install services, and spawn new processes.
 Taken together, this makes us think that `suspicious.exe` could be a persistent backdoor.
 Therefore, our next analysis step might be to run `suspicious.exe` in a sandbox and try to recover the command and control server.
+
+## detailed results
 
 By passing the `-vv` flag (for very verbose), capa reports exactly where it found evidence of these capabilities.
 This is useful for at least two reasons:
@@ -126,10 +148,15 @@ function @ 0x4011C0
 ...
 ```
 
-Additionally, capa also supports analyzing [CAPE](https://github.com/kevoreilly/CAPEv2) sandbox reports for dynamic capability extraction.
-In order to use this, you first submit your sample to CAPE for analysis, and then run capa against the generated report (JSON).
+capa also supports dynamic capabilities detection for multiple sandboxes including:
+* [CAPE](https://github.com/kevoreilly/CAPEv2) (supported report formats: `.json`, `.json_`, `.json.gz`)
+* [DRAKVUF](https://github.com/CERT-Polska/drakvuf-sandbox/) (supported report formats: `.log`, `.log.gz`)
+* [VMRay](https://www.vmray.com/) (supported report formats: analysis archive `.zip`)
 
-Here's an example of running capa against a packed binary, and then running capa against the CAPE report of that binary:
+
+To use this feature, submit your file to a supported sandbox and then download and run capa against the generated report file. This feature enables capa to match capabilities against dynamic and static features that the sandbox captured during execution.
+
+Here's an example of running capa against a packed file, and then running capa against the CAPE report generated for the same packed file:
 
 ```yaml
 $ capa 05be49819139a3fdcdbddbdefd298398779521f3d68daa25275cc77508e42310.exe
@@ -216,6 +243,7 @@ $ capa 05be49819139a3fdcdbddbdefd298398779521f3d68daa25275cc77508e42310.json
 ┕━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┷━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┙
 ```
 
+# capa rules
 capa uses a collection of rules to identify capabilities within a program.
 These rules are easy to write, even for those new to reverse engineering.
 By authoring rules, you can extend the capabilities that capa recognizes.
@@ -252,17 +280,27 @@ rule:
       - property/read: System.Net.Sockets.TcpClient::Client
 ```
 
-The [github.com/mandiant/capa-rules](https://github.com/mandiant/capa-rules) repository contains hundreds of standard library rules that are distributed with capa.
+The [github.com/mandiant/capa-rules](https://github.com/mandiant/capa-rules) repository contains hundreds of standard rules that are distributed with capa.
 Please learn to write rules and contribute new entries as you find interesting techniques in malware.
 
+# IDA Pro plugin: capa explorer
 If you use IDA Pro, then you can use the [capa explorer](https://github.com/mandiant/capa/tree/master/capa/ida/plugin) plugin.
 capa explorer helps you identify interesting areas of a program and build new capa rules using features extracted directly from your IDA Pro database.
+It also uses your local changes to the .idb to extract better features, such as when you rename a global variable that contains a dynamically resolved API address.
 
 ![capa + IDA Pro integration](https://github.com/mandiant/capa/blob/master/doc/img/explorer_expanded.png)
 
+# Ghidra integration
 If you use Ghidra, then you can use the [capa + Ghidra integration](/capa/ghidra/) to run capa's analysis directly on your Ghidra database and render the results in Ghidra's user interface.
 
 <img src="https://github.com/mandiant/capa/assets/66766340/eeae33f4-99d4-42dc-a5e8-4c1b8c661492" width=300>
+
+# blog posts
+- [Dynamic capa: Exploring Executable Run-Time Behavior with the CAPE Sandbox](https://www.mandiant.com/resources/blog/dynamic-capa-executable-behavior-cape-sandbox)
+- [capa v4: casting a wider .NET](https://www.mandiant.com/resources/blog/capa-v4-casting-wider-net) (.NET support)
+- [ELFant in the Room – capa v3](https://www.mandiant.com/resources/elfant-in-the-room-capa-v3) (ELF support)
+- [capa 2.0: Better, Stronger, Faster](https://www.mandiant.com/resources/capa-2-better-stronger-faster)
+- [capa: Automatically Identify Malware Capabilities](https://www.mandiant.com/resources/capa-automatically-identify-malware-capabilities)
 
 # further information
 ## capa
